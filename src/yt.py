@@ -7,11 +7,24 @@ download_archive_path = "download_archive.txt"
 
 
 def dateafter_filter(info_dict):
-    upload_date = info_dict.get("upload_date")
-    if not upload_date:
-        return None
-    upload_datetime = datetime.datetime.strptime(upload_date, "%Y%m%d")
-    one_day_ago = datetime.datetime.now() - datetime.timedelta(days=1)
+    timestamp = info_dict.get("timestamp")
+    if timestamp:
+        upload_datetime = datetime.datetime.fromtimestamp(
+            timestamp, tz=datetime.timezone.utc
+        )
+        one_day_ago = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(
+            days=1
+        )
+    else:
+        upload_date = info_dict.get("upload_date")
+        if not upload_date:
+            return None
+        naive_upload_datetime = datetime.datetime.strptime(upload_date, "%Y%m%d")
+        upload_datetime = naive_upload_datetime.replace(tzinfo=datetime.timezone.utc)
+        one_day_ago = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(
+            days=2
+        )
+
     if upload_datetime < one_day_ago:
         return "Video is older than one day"
     return None
