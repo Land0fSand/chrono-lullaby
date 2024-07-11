@@ -9,7 +9,7 @@ from task.send_file import send_file
 # from util import show_chat_id
 
 load_dotenv()
-FAST_PASS = 1 * 60 * 60 + 22 * 60
+SPEEDRUN = 1 * 60 * 60 + 22 * 60
 AUDIO_FOLDER = "au"
 TOKEN = os.environ.get("BOT_TOKEN")
 CHAT_ID = os.environ.get("CHAT_ID")
@@ -48,10 +48,10 @@ def main():
     request = HTTPXRequest(read_timeout=60, write_timeout=60)
     application = Application.builder().token(TOKEN).request(request).build()
     application.job_queue.run_repeating(
-        dl_task, interval=FAST_PASS, first=FAST_PASS // 256
+        dl_task, interval=SPEEDRUN, first=SPEEDRUN // 256
     )
     application.job_queue.run_repeating(
-        send_file_task, interval=FAST_PASS // 32, first=FAST_PASS // 16
+        send_file_task, interval=SPEEDRUN // 32, first=SPEEDRUN // 16
     )
     # application.add_handler(MessageHandler(filters.TEXT, show_chat_id))
     # application.add_handler(CommandHandler("addchannel", add_channel))
