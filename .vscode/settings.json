@@ -1,10 +1,10 @@
 {
-    "python.linting.pylintEnabled": true,
-    "python.linting.enabled": true,
-    "python.formatting.provider": "black",
-    "files.eol": "\n",
-    "editor.formatOnSave": true,
-    "editor.codeActionsOnSave": {
-        "source.fixAll": "always"
-    },
-  }
+  "python.linting.pylintEnabled": true,
+  "python.linting.enabled": true,
+  "python.formatting.provider": "black",
+  "files.eol": "\n",
+  "editor.formatOnSave": true,
+  "editor.codeActionsOnSave": {
+      "source.fixAll": "always"
+  },
+}
