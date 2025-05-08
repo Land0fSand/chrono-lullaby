@@ -1,0 +1,27 @@
+[tool.poetry]
+name = "chronolullaby"
+version = "0.1.0"
+description = "A bot to download and send YouTube audio files via Telegram"
+authors = ["Your Name <you@example.com>"]
+readme = "README.md"
+packages = [
+    { include = "src" }
+]
+
+[tool.poetry.dependencies]
+python = "^3.9"
+requests = "^2.31.0"
+beautifulsoup4 = "^4.12.3"
+yt-dlp = ">=2025.4.15"
+ffmpeg-python = "^0.2.0"
+pydub = "^0.25.1"
+python-dotenv = "^1.0.1"
+python-telegram-bot = "20.0"
+browser-cookie3 = "^0.19.1"
+
+[tool.poetry.group.dev.dependencies]
+# 可选：开发依赖（如测试工具），目前留空
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

@@ -32,7 +32,7 @@ def dl_youtube(channels) -> None:
 
 
 async def dl_task(context: ContextTypes.DEFAULT_TYPE) -> None:
-    channels = refresh_channels_from_file()  # 移除了script_dir参数
+    channels = refresh_channels_from_file()
     dl_youtube(channels)
 
 
@@ -41,7 +41,7 @@ async def send_file_task(context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def dl_story(context: ContextTypes.DEFAULT_TYPE) -> None:
-    channels = refresh_channels_from_file()  # 移除了script_dir参数
+    channels = refresh_channels_from_file()
     dl_youtube(channels)
 
 
@@ -50,8 +50,8 @@ def main():
     application = Application.builder().token(TOKEN).request(request).build()
     application.job_queue.run_repeating(
         dl_task,
-        interval=SPEEDRUN,
-        first=SPEEDRUN / 512,
+        interval=SPEEDRUN * 6,
+        first=5,
     )
     application.job_queue.run_repeating(
         send_file_task,

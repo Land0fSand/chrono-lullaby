@@ -3,7 +3,7 @@
 /story
 .env
 .gitignore
-channel_info.txt
+channels.txt
 download_archive.txt
 expenv.ps1
 expenv.sh
@@ -14,3 +14,5 @@ story.txt
 test.py
 video_info.json
 vls.py
+poetry.lock
+youtube.cookies
