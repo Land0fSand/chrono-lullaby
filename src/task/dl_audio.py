@@ -3,8 +3,10 @@ import os
 import datetime
 import json
 import sys
+import shutil
 from config import (
     AUDIO_FOLDER, 
+    TEMP_AUDIO_FOLDER,
     DOWNLOAD_ARCHIVE, 
     DEBUG_INFO, 
     STORY_FILE,
@@ -69,9 +71,16 @@ def check_cookies():
 
 
 def get_ydl_opts(custom_opts=None):
+    if not os.path.exists(TEMP_AUDIO_FOLDER):
+        os.makedirs(TEMP_AUDIO_FOLDER)
+        print(f"已创建临时下载目录: {TEMP_AUDIO_FOLDER}")
+
     base_opts = {
         "format": "bestaudio/best",
-        "outtmpl": os.path.join(AUDIO_FOLDER, "%(uploader)s.%(fulltitle)s.%(ext)s"),
+        "outtmpl": {
+            'default': os.path.join(TEMP_AUDIO_FOLDER, "%(uploader)s.%(fulltitle)s.%(ext)s"),
+            'aac': os.path.join(TEMP_AUDIO_FOLDER, "%(uploader)s.%(fulltitle)s.m4a"), 
+        },
         "postprocessors": [
             {
                 "key": "FFmpegExtractAudio",
@@ -117,7 +126,7 @@ def progress_hook(d):
         except Exception:
             pass
     elif d['status'] == 'finished':
-        print(f"\n已完成下载: {d.get('filename', '')}")
+        print(f"\n下载完成 (原始文件): {d.get('filename', '')}")
     elif d['status'] == 'already_downloaded':
         print(f"已存在: {d.get('title', '')}")
 
@@ -135,14 +144,11 @@ def get_available_format(url):
         audio_formats = [f for f in formats if f.get("acodec") != "none"]
         if audio_formats:
             return audio_formats[0].get("format_id", "bestaudio/best")
-        # 如果没有音频格式，尝试选择任何可用的视频格式
         video_formats = [f for f in formats if f.get("vcodec") != "none"]
         if video_formats:
             return video_formats[0].get("format_id", "best")
-        # 如果都没有，尝试选择任何可用格式
         if formats:
             return formats[0].get("format_id", "best")
-        # 如果都没有，返回默认值
         return "best"
 
 
@@ -150,10 +156,15 @@ def dl_audio_latest(channel_name):
     if not check_cookies():
         return False
     
+    if not os.path.exists(AUDIO_FOLDER):
+        os.makedirs(AUDIO_FOLDER)
+        print(f"已创建最终音频目录: {AUDIO_FOLDER}")
+
     custom_opts = {
         "download_archive": DOWNLOAD_ARCHIVE,
         "playlistend": 3,
         "match_filter": oneday_filter,
+        "keepvideo": False, 
     }
     
     ydl_opts = get_ydl_opts(custom_opts)
@@ -162,39 +173,109 @@ def dl_audio_latest(channel_name):
         try:
             print(f"开始获取频道 {channel_name} 的视频列表...")
             url = f"{yt_base_url}{channel_name}"
-            info = ydl.extract_info(url, download=False)
-            entries = info.get("entries", [])
-            for entry in entries:
-                video_entries = entry.get("entries", [])
-                for video in video_entries:
-                    video_url = video.get("webpage_url", "")
-                    if video_url:
-                        format_id = get_available_format(video_url)
-                        video_ydl_opts = ydl_opts.copy()
-                        video_ydl_opts["format"] = format_id
-                        with yt_dlp.YoutubeDL(video_ydl_opts) as video_ydl:
-                            try:
-                                video_ydl.download([video_url])
-                            except Exception as e:
-                                print(f"下载视频 {video.get('title', '未知标题')} 时发生错误: {str(e)}")
-                                continue
+            channel_info = ydl.extract_info(url, download=False)
+            if not channel_info or 'entries' not in channel_info:
+                print(f"频道 {channel_name} 未找到视频或信息不完整。")
+                return False
+
+            entries_to_download = []
+            if channel_info.get('_type') == 'playlist':
+                for video_playlist_entry in channel_info.get('entries', []):
+                    if video_playlist_entry and video_playlist_entry.get('_type') == 'playlist':
+                        for video_in_playlist in video_playlist_entry.get('entries', []):
+                             if video_in_playlist: entries_to_download.append(video_in_playlist)
+                    elif video_playlist_entry:
+                        entries_to_download.append(video_playlist_entry)
+            else:
+                entries_to_download = channel_info.get('entries', [])
+
+            for video_info in entries_to_download:
+                video_url = video_info.get("webpage_url")
+                if not video_url:
+                    print(f"  跳过条目，无URL: {video_info.get('title', '未知标题')}")
+                    continue
+
+                print(f"  准备处理视频: {video_info.get('title', '未知标题')} ({video_url})")
+                
+                uploader = video_info.get('uploader', 'UnknownUploader')
+                fulltitle = video_info.get('fulltitle', video_info.get('title', 'UnknownTitle'))
+                safe_title = "".join(c if c.isalnum() or c in " .-_()" else "_" for c in fulltitle)
+                safe_uploader = "".join(c if c.isalnum() or c in " .-_()" else "_" for c in uploader)
+
+                expected_audio_ext = ".m4a"
+                final_audio_filename_stem = f"{safe_uploader}.{safe_title}"
+                
+                temp_audio_path_without_ext = os.path.join(TEMP_AUDIO_FOLDER, final_audio_filename_stem)
+                expected_temp_audio_path = temp_audio_path_without_ext + expected_audio_ext
+
+                final_destination_audio_path = os.path.join(AUDIO_FOLDER, f"{final_audio_filename_stem}{expected_audio_ext}")
+
+                if os.path.exists(final_destination_audio_path):
+                    print(f"  最终音频文件已存在于目标目录: {final_destination_audio_path}，跳过。")
+                    continue
+                
+                current_video_ydl_opts = ydl_opts.copy()
+                current_video_ydl_opts['outtmpl'] = {
+                    'default': temp_audio_path_without_ext + '.%(ext)s',
+                    'aac': temp_audio_path_without_ext + expected_audio_ext
+                }
+
+                print(f"    将下载到临时文件名模板: {temp_audio_path_without_ext}.%(ext)s")
+                print(f"    预期转换后临时音频: {expected_temp_audio_path}")
+                print(f"    最终将移动到: {final_destination_audio_path}")
+
+                try:
+                    with yt_dlp.YoutubeDL(current_video_ydl_opts) as video_ydl:
+                        video_ydl.download([video_url]) 
+                    
+                    if os.path.exists(expected_temp_audio_path):
+                        print(f"    转换后音频已在临时目录: {expected_temp_audio_path}")
+                        print(f"    准备移动到: {final_destination_audio_path}")
+                        shutil.move(expected_temp_audio_path, final_destination_audio_path)
+                        print(f"    成功移动到: {final_destination_audio_path}")
+                    else:
+                        print(f"错误: 转换后的音频文件 {expected_temp_audio_path} 在临时目录中未找到！")
+                        original_downloaded_file_actual_ext = None
+                        for ext_try in ['.webm', '.mp4', '.mkv', '.flv', '.avi', '.mov', '.opus', '.ogg', '.mp3']:
+                            potential_orig_file = temp_audio_path_without_ext + ext_try
+                            if os.path.exists(potential_orig_file):
+                                original_downloaded_file_actual_ext = ext_try
+                                print(f"      找到原始下载文件: {potential_orig_file}，但未转换为 {expected_audio_ext}")
+                                break
+                        if not original_downloaded_file_actual_ext:
+                             print(f"      原始下载文件也未找到 (尝试的模板: {temp_audio_path_without_ext}.*)")
+
+                except yt_dlp.utils.DownloadError as de:
+                    if "already been recorded in the archive" in str(de):
+                        print(f"  视频已在存档中记录，跳过: {video_info.get('title', '未知标题')}")
+                    else:
+                        print(f"  下载视频 {video_info.get('title', '未知标题')} 时发生 yt-dlp DownloadError: {str(de)}")
+                    if os.path.exists(expected_temp_audio_path):
+                        try: os.remove(expected_temp_audio_path); print(f"    已清理部分下载的音频文件: {expected_temp_audio_path}")
+                        except OSError: pass
+                    for ext_try in ['.webm', '.mp4', '.mkv']: 
+                        potential_orig_file = temp_audio_path_without_ext + ext_try
+                        if os.path.exists(potential_orig_file):
+                            try: os.remove(potential_orig_file); print(f"    已清理部分下载的视频文件: {potential_orig_file}")
+                            except OSError: pass
+                            break
+                    continue
+                except Exception as e:
+                    print(f"  下载视频 {video_info.get('title', '未知标题')} 时发生一般错误: {type(e).__name__} - {str(e)}")
+                    continue
+        
         except Exception as e:
-            print(f"下载时发生错误: {str(e)}")
+            print(f"处理频道 {channel_name} 时发生错误: {type(e).__name__} - {str(e)}")
             if "HTTP Error 404" in str(e):
-                print(f"频道 {channel_name} 不存在，请检查频道名称是否正确")
-            elif any(msg in str(e) for msg in ["Sign in to confirm", "Unable to download API page", "not a bot"]):
-                print("\nCookies可能已过期！")
+                print(f"频道 {channel_name} 不存在或无法访问，请检查频道名称是否正确。")
+            elif any(msg in str(e).lower() for msg in ["sign in to confirm", "unable to download api page", "not a bot", "consent"]):
+                print("\nCookies可能已过期或需要同意YouTube政策！")
                 print("请按以下步骤更新cookies：")
-                print("1. 使用Cookie-Editor导出新的cookies")
-                print("2. 将新的cookies内容覆盖保存到 'youtube.cookies' 文件")
-                print("3. 完成后按 Enter 键继续程序")
-                input("等待用户更新 cookies，按 Enter 键继续...")
-                if not check_cookies():
-                    print("仍然未找到有效的 cookies 文件，程序退出")
-                    return False
-                print("检测到新的 cookies 文件，继续下载过程...")
-                return dl_audio_latest(channel_name)  # 递归调用以重试下载
-            return False
+                print("1. (浏览器) 清除youtube.com的cookies，访问YouTube并确保已登录及处理任何弹窗。")
+                print("2. (浏览器) 使用Cookie-Editor导出新的cookies。")
+                print("3. 将新的cookies内容覆盖保存到 'youtube.cookies' 文件。")
+                print("4. 完成后按 Enter 键继续程序或重启程序。")
+                return False
     return True
 
 
@@ -239,7 +320,7 @@ def dl_audio_closest_after(au_folder, channel_name, target_timestamp=None):
         return False
     
     ydl_opts = get_ydl_opts()
-    print("已配置下载选项")
+    print("已配置下载选项 (将使用临时目录)")
     
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         try:
@@ -249,11 +330,10 @@ def dl_audio_closest_after(au_folder, channel_name, target_timestamp=None):
                 print(f"无法获取频道信息: {channel_name}")
                 return False
                 
-            print("正在处理视频列表...")
+            print("正在处理视频列表以查找目标视频...")
             entries = info_dict.get("entries", [])
-            
             if not entries:
-                print("未找到任何视频")
+                print("未找到任何视频条目")
                 return False
 
             closest_video = None
@@ -261,56 +341,98 @@ def dl_audio_closest_after(au_folder, channel_name, target_timestamp=None):
             oldest_video = None
             oldest_timestamp = float("inf")
 
-            for entry in entries:
-                video_entries = entry.get("entries", [])
-                for video in video_entries:
-                    video_timestamp = video.get("timestamp")
-                    if not video_timestamp:
-                        upload_date = video.get("upload_date")
-                        if upload_date:
-                            video_timestamp = int(
-                                datetime.datetime.strptime(
-                                    upload_date, "%Y%m%d"
-                                ).timestamp()
-                            )
-                        else:
-                            continue
-
-                    if video_timestamp < oldest_timestamp:
-                        oldest_timestamp = video_timestamp
-                        oldest_video = video
-
-                    if target_timestamp is not None:
-                        time_diff = video_timestamp - target_timestamp
-                        if 0 < time_diff < closest_time_diff:
-                            closest_time_diff = time_diff
-                            closest_video = video
-
-            if target_timestamp is None:
-                closest_video = oldest_video
-
-            if not closest_video:
-                print("No suitable video found")
-                return False
-
-            with open(DEBUG_INFO, "w", encoding="utf-8") as debug_file:
-                json.dump(closest_video, debug_file, ensure_ascii=False, indent=4)
-
-            timestamp = closest_video.get("timestamp", closest_video.get("upload_date"))
-            if not timestamp:
-                print("No valid timestamp or upload_date found for the video")
-                return False
-
-            update_channel_info_file(channel_name, timestamp, STORY_FILE)
-
-            if "videos" in entry.get("title", "").lower():
-                ydl.download([closest_video["webpage_url"]])
+            processed_videos_for_closest = []
+            if info_dict.get('_type') == 'playlist':
+                 for entry_playlist in info_dict.get('entries', []):
+                    if entry_playlist and entry_playlist.get('_type') == 'playlist':
+                        for video_in_playlist in entry_playlist.get('entries', []):
+                             if video_in_playlist: processed_videos_for_closest.append(video_in_playlist)
+                    elif entry_playlist:
+                        processed_videos_for_closest.append(entry_playlist)
             else:
-                print(f"Skipped downloading video from playlist: {entry.get('title', '')}")
+                processed_videos_for_closest = info_dict.get('entries', [])
 
-            return True
+            for video_data in processed_videos_for_closest:
+                video_timestamp = video_data.get("timestamp")
+                if not video_timestamp:
+                    upload_date = video_data.get("upload_date")
+                    if upload_date:
+                        try:
+                            video_timestamp = int(datetime.datetime.strptime(upload_date, "%Y%m%d").timestamp())
+                        except ValueError: continue
+                    else: continue
+
+                if video_timestamp < oldest_timestamp:
+                    oldest_timestamp = video_timestamp
+                    oldest_video = video_data
+                if target_timestamp is not None:
+                    time_diff = video_timestamp - target_timestamp
+                    if 0 < time_diff < closest_time_diff:
+                        closest_time_diff = time_diff
+                        closest_video = video_data
+            
+            if target_timestamp is None and oldest_video:
+                closest_video = oldest_video
+            
+            if not closest_video:
+                print("根据时间戳未找到合适视频")
+                return False
+            
+            video_webpage_url = closest_video.get("webpage_url")
+            if not video_webpage_url:
+                print(f"选定视频没有webpage_url: {closest_video.get('title', '未知')}")
+                return False
+
+            print(f"选定要下载的历史视频: {closest_video.get('title', '未知标题')}")
+
+            uploader = closest_video.get('uploader', 'UnknownUploader')
+            fulltitle = closest_video.get('fulltitle', closest_video.get('title', 'UnknownTitle'))
+            safe_title = "".join(c if c.isalnum() or c in " .-_()" else "_" for c in fulltitle)
+            safe_uploader = "".join(c if c.isalnum() or c in " .-_()" else "_" for c in uploader)
+            expected_audio_ext = ".m4a"
+            final_audio_filename_stem = f"{safe_uploader}.{safe_title}"
+
+            temp_audio_path_without_ext = os.path.join(TEMP_AUDIO_FOLDER, final_audio_filename_stem)
+            expected_temp_audio_path = temp_audio_path_without_ext + expected_audio_ext
+            final_destination_audio_path = os.path.join(au_folder, f"{final_audio_filename_stem}{expected_audio_ext}")
+
+            if os.path.exists(final_destination_audio_path):
+                print(f"  最终音频文件已存在于目标目录: {final_destination_audio_path}，跳过。")
+                timestamp_to_update = closest_video.get("timestamp", closest_video.get("upload_date"))
+                if timestamp_to_update:
+                    if isinstance(timestamp_to_update, str):
+                         timestamp_to_update = int(datetime.datetime.strptime(timestamp_to_update, "%Y%m%d").timestamp())
+                    update_channel_info_file(channel_name, timestamp_to_update, STORY_FILE)
+                return True
+
+            single_video_ydl_opts = ydl_opts.copy()
+            single_video_ydl_opts['outtmpl'] = {
+                'default': temp_audio_path_without_ext + '.%(ext)s',
+                'aac': temp_audio_path_without_ext + expected_audio_ext
+            }
+            single_video_ydl_opts.pop('playlistend', None) 
+            single_video_ydl_opts.pop('match_filter', None)
+
+            with yt_dlp.YoutubeDL(single_video_ydl_opts) as single_video_downloader:
+                single_video_downloader.download([video_webpage_url])
+
+            if os.path.exists(expected_temp_audio_path):
+                print(f"    历史视频转换后音频已在临时目录: {expected_temp_audio_path}")
+                shutil.move(expected_temp_audio_path, final_destination_audio_path)
+                print(f"    成功将历史视频音频移动到: {final_destination_audio_path}")
+
+                timestamp_to_update = closest_video.get("timestamp", closest_video.get("upload_date"))
+                if timestamp_to_update:
+                    if isinstance(timestamp_to_update, str):
+                         timestamp_to_update = int(datetime.datetime.strptime(timestamp_to_update, "%Y%m%d").timestamp())
+                    update_channel_info_file(channel_name, timestamp_to_update, STORY_FILE)
+                return True
+            else:
+                print(f"错误: 历史视频转换后的音频文件 {expected_temp_audio_path} 在临时目录中未找到！")
+                return False
+            
         except Exception as e:
-            print(f"获取视频信息时发生错误: {str(e)}")
+            print(f"处理历史视频 {channel_name} 时发生错误: {str(e)}")
             return False
 
 

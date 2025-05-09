@@ -33,7 +33,17 @@ async def send_file(context: ContextTypes.DEFAULT_TYPE, chat_id, audio_folder) -
         
         if file_size_mb > 49: # Use a slightly lower threshold to be safe
             print(f"文件 {file_name} 超过 49MB 限制，将进行切割")
-            split_files = split_audio_file(file_path, file_size_mb)
+            # Initial calculation of num_parts based on 45MB target
+            initial_target_segment_size_mb = 45
+            initial_num_parts = math.ceil(file_size_mb / initial_target_segment_size_mb)
+            
+            # Max parts can be, for example, if segments were 10MB on average, or a fixed higher cap
+            # For a 100MB file, this would be 10 parts. For 1000MB, 100 parts.
+            # Or, a simpler cap like initial_num_parts + 10 (max 10 retries)
+            max_parts_cap = initial_num_parts + 10 
+
+            split_files = _recursive_split_and_check(file_path, file_size_mb, initial_num_parts, max_parts_cap)
+            
             if split_files:
                 print(f"文件 {file_name} 成功切割成 {len(split_files)} 个部分，准备发送...")
                 for split_file_path in split_files:
@@ -49,9 +59,7 @@ async def send_file(context: ContextTypes.DEFAULT_TYPE, chat_id, audio_folder) -
                 except OSError as e:
                     print(f"删除原始大文件 {file_path} 失败: {e}")
             else:
-                print(f"文件 {file_name} 切割失败，跳过此文件。")
-                # Optionally, decide what to do with the original large file if splitting fails
-                # For now, we leave it, but you might want to move it to an error folder
+                print(f"文件 {file_name} 切割失败或超出重试次数，跳过此文件。")
         else:
             await send_single_file(context, chat_id, file_path)
             try:
@@ -62,131 +70,108 @@ async def send_file(context: ContextTypes.DEFAULT_TYPE, chat_id, audio_folder) -
         
         break  # 每次任务只处理一个原始文件（或其分片）
 
-def split_audio_file(file_path, file_size_mb):
+def _recursive_split_and_check(file_path, original_file_size_mb, num_parts_to_try, max_parts_cap, recursion_depth=0, max_recursion_depth=10):
     """
-    使用 ffmpeg-python 将大文件切割成多个部分，每个部分小于 50MB
-    返回切割后的文件路径列表
+    Recursively attempts to split a file, checking segment sizes and increasing parts if needed.
+    file_path: path to the original large file.
+    original_file_size_mb: size of the original file in MB (for logging/reference).
+    num_parts_to_try: current number of segments to attempt splitting into.
+    max_parts_cap: a hard limit on the number of parts we will try.
+    recursion_depth: current depth of recursion to prevent infinite loops.
+    max_recursion_depth: maximum allowed recursion calls.
     """
-    output_files = []
+    print(f"尝试切割: {os.path.basename(file_path)} 成 {num_parts_to_try} 段 (递归深度: {recursion_depth})")
+
+    if num_parts_to_try <= 0:
+        print("错误: num_parts_to_try 无效 (<=0)")
+        return []
+    if num_parts_to_try > max_parts_cap:
+        print(f"错误: 尝试的分段数 ({num_parts_to_try}) 已超过最大允许分段数 ({max_parts_cap})。停止切割。")
+        return []
+    if recursion_depth >= max_recursion_depth:
+        print(f"错误: 已达到最大递归深度 ({max_recursion_depth})。停止切割。")
+        return []
+
+    output_segments = []
+    base_name, ext = os.path.splitext(file_path)
+    segment_pattern = f"{base_name}_%d{ext}" # ffmpeg default is 0-indexed
+
     try:
         probe = ffmpeg.probe(file_path)
         duration = float(probe['format']['duration'])
         
-        # Use 45MB as the target segment size to be safe with Telegram's 50MB limit
-        target_segment_size_mb = 45 
-        num_parts = math.ceil(file_size_mb / target_segment_size_mb)
-        
-        # Always add one more part to be safer with VBR files
-        # This ensures shorter segment durations
-        num_parts += 1
+        if duration <= 0:
+            print(f"错误: 文件 {file_path} 时长无效 ({duration}s)。")
+            return []
+            
+        segment_duration = duration / num_parts_to_try
+        if segment_duration < 1: # Avoid segments that are too short (e.g. less than 1s)
+            print(f"警告: 计算的段时长 ({segment_duration:.2f}s) 过短 (尝试分成 {num_parts_to_try} 段)。可能导致问题或切割过多。")
+            # Potentially add a condition here to stop if segments are too short, e.g., return []
+            # For now, let it proceed but be aware.
 
-        if num_parts <= 1: # Should not happen if file_size_mb > 49 and we add 1
-             print(f"警告: 计算出的分段数 ({num_parts}) 不大于1，即使文件大小 ({file_size_mb:.2f}MB) 超过限制。将尝试按原样发送。")
-             return [file_path] # Return original path to be sent as is, though it might fail.
-
-        segment_duration = duration / num_parts
+        print(f"  FFmpeg 参数: input='{file_path}', output='{segment_pattern}', num_parts={num_parts_to_try}, seg_time={segment_duration:.2f}s")
         
-        base_name, ext = os.path.splitext(file_path)
-        
-        # Generate expected output filenames (ffmpeg's segmenter is 0-indexed with %d)
-        # However, we'll rename them to 1-indexed for clarity if needed or use as is.
-        # For simplicity, let's stick to ffmpeg's default output name and then list them.
-        # The output pattern ffmpeg uses for segment is base_name%d.ext (0-indexed)
-        # We will generate a list of *expected* names to check against later.
-        
-        output_pattern = f"{base_name}_%d{ext}" # ffmpeg will create base_name_0.ext, base_name_1.ext ...
-        
-        print(f"FFmpeg 切割参数: input='{file_path}', output='{output_pattern}', segment_time='{segment_duration}'")
-
         ffmpeg.input(file_path).output(
-            output_pattern,
+            segment_pattern,
             format='segment',
             segment_time=segment_duration,
-            c='copy', # Use stream copy for speed if format is compatible
-            reset_timestamps=1 # Helpful for segments
-        ).run(quiet=True, overwrite_output=True) # quiet=False for debugging ffmpeg
+            c='copy',
+            reset_timestamps=1
+        ).run(quiet=True, overwrite_output=True)
 
-        # After ffmpeg runs, list the files created based on the pattern
-        # ffmpeg creates base_name_0.ext, base_name_1.ext ... base_name_N-1.ext
-        for i in range(num_parts):
-            # ffmpeg by default creates base_name_0.ext, base_name_1.ext etc.
-            # The output_pattern for ffmpeg.output already handles the %d
-            # So we just need to construct the names it *should* have created.
-            potential_segment_name = f"{base_name}_{i}{ext}" # Files like filename_0.mp3, filename_1.mp3
-            if os.path.exists(potential_segment_name) and os.path.getsize(potential_segment_name) > 0:
-                output_files.append(potential_segment_name)
+        # Validate segments
+        all_segments_ok = True
+        max_segment_size_mb = 0
+        for i in range(num_parts_to_try):
+            segment_name = f"{base_name}_{i}{ext}"
+            if os.path.exists(segment_name) and os.path.getsize(segment_name) > 0:
+                output_segments.append(segment_name)
+                current_segment_size_mb = os.path.getsize(segment_name) / (1024 * 1024)
+                if current_segment_size_mb > max_segment_size_mb:
+                    max_segment_size_mb = current_segment_size_mb
+                if current_segment_size_mb >= 50: # Check against Telegram's hard limit
+                    print(f"  失败: 切割段 {segment_name} 大小为 {current_segment_size_mb:.2f}MB (>= 50MB)")
+                    all_segments_ok = False
+                    break # No need to check further for this attempt
             else:
-                # If a segment is missing or empty, it's a failure
-                print(f"错误: 预期切割文件 {potential_segment_name} 未找到或为空。切割失败。")
-                # Cleanup any segments that were created before the error
-                for f_to_delete in output_files: # output_files only contains successfully created ones so far
-                    try:
-                        os.remove(f_to_delete)
-                        print(f"已清理部分切割文件: {f_to_delete}")
-                    except OSError as e:
-                        print(f"清理部分切割文件 {f_to_delete} 失败: {e}")
-                # Also cleanup ffmpeg's other possible outputs if the pattern was different
-                for k in range(num_parts): # Check for base_name_0, base_name_1 ...
-                    temp_name_to_check = f"{base_name}_{k}{ext}"
-                    if os.path.exists(temp_name_to_check) and temp_name_to_check not in output_files:
-                        try:
-                            os.remove(temp_name_to_check)
-                            print(f"已清理额外切割文件: {temp_name_to_check}")
-                        except OSError as e:
-                             print(f"清理额外切割文件 {temp_name_to_check} 失败: {e}")
-                return [] # Indicate failure
+                print(f"  错误: 预期切割段 {segment_name} 未找到或为空。")
+                all_segments_ok = False
+                break
 
-        if not output_files or len(output_files) != num_parts :
-            print(f"错误: 切割后文件的数量 ({len(output_files)}) 与预期数量 ({num_parts}) 不符。")
-            # Cleanup
-            for f_to_delete in output_files:
-                try:
-                    os.remove(f_to_delete)
+        if not all_segments_ok or len(output_segments) != num_parts_to_try:
+            print(f"  当前切割尝试 ({num_parts_to_try} 段) 失败。清理临时文件并重试...")
+            for seg_file in output_segments: # output_segments might be partially filled
+                try: os.remove(seg_file) 
                 except OSError: pass
-            for k in range(num_parts): # Check for base_name_0, base_name_1 ...
-                    temp_name_to_check = f"{base_name}_{k}{ext}"
-                    if os.path.exists(temp_name_to_check) and temp_name_to_check not in output_files:
-                        try:
-                            os.remove(temp_name_to_check)
-                        except OSError: pass
-            return []
-
-        print(f"文件 {file_path} 已成功切割成 {len(output_files)} 个部分: {output_files}")
-        return output_files
+            # Also attempt to clean any other numbered segments ffmpeg might have created
+            for i in range(num_parts_to_try + 2): # Check a bit beyond just in case
+                stale_segment = f"{base_name}_{i}{ext}"
+                if os.path.exists(stale_segment) and stale_segment not in output_segments: # Avoid deleting what might be kept if logic changes
+                    try: os.remove(stale_segment)
+                    except OSError: pass 
+            
+            return _recursive_split_and_check(file_path, original_file_size_mb, num_parts_to_try + 1, max_parts_cap, recursion_depth + 1, max_recursion_depth)
+        
+        print(f"  成功: 文件 {os.path.basename(file_path)} 切割成 {len(output_segments)} 段，最大段大小: {max_segment_size_mb:.2f}MB")
+        return output_segments
 
     except ffmpeg.Error as e:
-        print(f"FFmpeg 切割文件 {file_path} 时出错:")
-        print(f"  FFmpeg stdout: {e.stdout.decode('utf8', errors='ignore') if e.stdout else 'N/A'}")
-        print(f"  FFmpeg stderr: {e.stderr.decode('utf8', errors='ignore') if e.stderr else 'N/A'}")
-        # Cleanup any partially created files by ffmpeg based on the expected pattern
-        base_name, ext = os.path.splitext(file_path)
-        # num_parts might not be calculated if error was before it, assume a reasonable max to check
-        # Or better, just check for files matching base_name_*.ext pattern
-        # This is a bit tricky as we don't know how many it *tried* to make.
-        # Let's just iterate through what might exist if num_parts was calculated
-        if 'num_parts' in locals():
-            for i in range(num_parts):
-                potential_segment_name = f"{base_name}_{i}{ext}"
-                if os.path.exists(potential_segment_name):
-                    try:
-                        os.remove(potential_segment_name)
-                        print(f"已清理FFmpeg错误后残留文件: {potential_segment_name}")
-                    except OSError as ose:
-                        print(f"清理FFmpeg错误后残留文件 {potential_segment_name} 失败: {ose}")
-        return []
+        print(f"  FFmpeg 错误 (尝试 {num_parts_to_try} 段): {e.stderr.decode('utf8', errors='ignore') if e.stderr else 'N/A'}")
+        # Cleanup on ffmpeg error
+        for i in range(num_parts_to_try + 2):
+            segment_name = f"{base_name}_{i}{ext}"
+            if os.path.exists(segment_name):
+                try: os.remove(segment_name)
+                except OSError: pass
+        return [] # Indicate failure for this path
     except Exception as e:
-        print(f"切割文件 {file_path} 时发生意外错误: {type(e).__name__} - {str(e)}")
-        # Similar cleanup for unexpected errors
-        base_name, ext = os.path.splitext(file_path)
-        if 'num_parts' in locals():
-            for i in range(num_parts):
-                potential_segment_name = f"{base_name}_{i}{ext}"
-                if os.path.exists(potential_segment_name):
-                    try:
-                        os.remove(potential_segment_name)
-                        print(f"已清理意外错误后残留文件: {potential_segment_name}")
-                    except OSError as ose:
-                        print(f"清理意外错误后残留文件 {potential_segment_name} 失败: {ose}")
+        print(f"  意外错误 (尝试 {num_parts_to_try} 段): {type(e).__name__} - {str(e)}")
+        for i in range(num_parts_to_try + 2):
+            segment_name = f"{base_name}_{i}{ext}"
+            if os.path.exists(segment_name):
+                try: os.remove(segment_name)
+                except OSError: pass
         return []
 
 async def send_single_file(context: ContextTypes.DEFAULT_TYPE, chat_id, file_path):

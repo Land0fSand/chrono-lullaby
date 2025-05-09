@@ -105,7 +105,8 @@ mypy.ini
 .pyre/
 
 # this project
-/au/
+/au
+/au_temp
 /download_archive.txt
 /channels.txt
 youtube.cookies

@@ -6,6 +6,7 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # 定义所有路径
 AUDIO_FOLDER = os.path.join(PROJECT_ROOT, "au")
+TEMP_AUDIO_FOLDER = os.path.join(PROJECT_ROOT, "au_temp")
 CHANNELS_FILE = os.path.join(PROJECT_ROOT, "channels.txt")
 ENV_FILE = os.path.join(PROJECT_ROOT, ".env")
 DOWNLOAD_ARCHIVE = os.path.join(PROJECT_ROOT, "download_archive.txt")
