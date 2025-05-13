@@ -12,7 +12,7 @@ async def send_file(context: ContextTypes.DEFAULT_TYPE, chat_id, audio_folder) -
         return
     files = [f for f in os.listdir(audio_folder) if os.path.isfile(os.path.join(audio_folder, f)) and not f.startswith('.')] # Ignore hidden files
     if not files:
-        print("没有找到音频文件")
+        # print("没有找到音频文件")
         return
     # 按文件创建时间排序，确保最早的文件先发送
     files.sort(key=lambda x: os.path.getctime(os.path.join(audio_folder, x)))
