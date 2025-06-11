@@ -162,7 +162,7 @@ def dl_audio_latest(channel_name):
 
     custom_opts = {
         "download_archive": DOWNLOAD_ARCHIVE,
-        "playlistend": 3,
+        "playlistend": 6,
         "match_filter": oneday_filter,
         "keepvideo": False, 
     }

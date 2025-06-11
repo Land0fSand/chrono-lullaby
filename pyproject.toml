@@ -12,7 +12,7 @@ packages = [
 python = "^3.9"
 requests = "^2.31.0"
 beautifulsoup4 = "^4.12.3"
-yt-dlp = ">=2025.4.15"
+yt-dlp = "^2025.5.22"
 ffmpeg-python = "^0.2.0"
 pydub = "^0.25.1"
 python-dotenv = "^1.0.1"
