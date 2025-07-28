@@ -110,3 +110,7 @@ mypy.ini
 /download_archive.txt
 /channels.txt
 youtube.cookies
+
+# logs and process info
+/logs/
+process_info.json
