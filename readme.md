@@ -92,34 +92,66 @@ python src/main.py
 
 ## 🚀 快速启动（推荐）
 
-### PowerShell 脚本管理（推荐）
+### 统一命令管理（推荐）
 
-项目提供了完整的 PowerShell 脚本套件，支持一键启动和管理：
+项目提供了统一的 `ch` 命令，支持所有管理功能：
 
 ```powershell
 # 启动服务（后台运行）
-.\ch.ps1
+.\ch start
 
 # 查看状态
-.\ch-status.ps1
+.\ch status
 
 # 查看日志
-.\ch-logs.ps1
+.\ch logs
+
+# 查看下载器日志（实时）
+.\ch logs downloader --follow
+
+# 查看错误日志
+.\ch logs error
+
+# 列出所有日志文件
+.\ch logs --list
 
 # 停止服务
-.\ch-stop.ps1
+.\ch stop
+
+# 强制清理所有进程
+.\ch cleanup
+
+# 显示帮助信息
+.\ch help
 ```
 
 ### 全局命令（安装后可在任意位置使用）
 
-将 `ch.ps1`、`ch-status.ps1`、`ch-logs.ps1`、`ch-stop.ps1` 复制到 PATH 目录后：
+**自动安装（推荐）：**
+
+```powershell
+# 永久添加到系统 PATH
+.\ch add-chtopath
+```
+
+**手动安装：**
+将 `ch.ps1` 复制到 PATH 目录，或将项目目录添加到环境变量：
 
 ```powershell
 # 在任何位置运行
-ch              # 启动服务
-ch-status       # 查看状态
-ch-logs         # 查看日志
-ch-stop         # 停止服务
+ch start        # 启动服务
+ch status       # 查看状态
+ch logs         # 查看日志
+ch stop         # 停止服务
+ch cleanup      # 强制清理
+ch help         # 帮助信息
+```
+
+**临时使用（仅当前会话）：**
+
+```powershell
+# 临时添加到 PATH（仅当前 PowerShell 会话有效）
+$env:PATH = "项目目录;$env:PATH"
 ```
 
 ### 传统启动方式
@@ -143,35 +175,65 @@ python src/main.py
 
 ---
 
-## 📋 脚本参数说明
+## 📋 命令参数说明
 
-### ch-logs 命令参数
+### ch logs 命令参数
 
 ```powershell
 # 查看所有日志（最近50行）
-ch-logs
+ch logs
 
-# 实时跟踪下载器日志
-ch-logs -Type downloader -Follow
+# 查看特定类型日志
+ch logs downloader          # 查看下载器日志
+ch logs bot                 # 查看机器人日志
+ch logs error               # 查看错误日志
 
-# 查看错误日志
-ch-logs -Type error
+# 实时跟踪日志
+ch logs downloader --follow # 实时查看下载器日志
+ch logs bot -f              # 实时查看机器人日志（短参数）
 
 # 列出所有日志文件
-ch-logs -List
+ch logs --list
+ch logs -l
 
-# 查看更多行数
-ch-logs -Lines 100
+# 查看指定行数
+ch logs --lines 100         # 查看最近100行
+ch logs 200                 # 查看最近200行（直接数字）
+
+# 组合使用
+ch logs downloader --follow --lines 100
 ```
 
 ### 故障排除
 
 ```powershell
-# 清理冲突进程
+# 清理冲突进程（强制终止所有相关进程）
+.\ch cleanup
+
+# 传统清理方式（如果统一命令不可用）
 .\ch-cleanup.ps1
 
 # 手动停止所有进程
 Get-Process *python* | Stop-Process -Force
+```
+
+### 其他命令
+
+```powershell
+# 查看帮助信息
+ch help
+ch --help
+
+# 查看版本信息
+ch version
+ch --version
+
+# 所有可用命令
+ch start      # 启动服务
+ch stop       # 停止服务
+ch status     # 查看状态
+ch logs       # 查看日志
+ch cleanup    # 强制清理
 ```
 
 ---
