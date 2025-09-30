@@ -24,6 +24,55 @@ if (-not (Test-Path "src/yt_dlp_downloader.py") -or -not (Test-Path "src/telegra
     exit 1
 }
 
+# 检查是否已有实例在运行
+$processInfoPath = Join-Path $projectRoot "process_info.json"
+if (Test-Path $processInfoPath) {
+    try {
+        $existingInfo = Get-Content $processInfoPath | ConvertFrom-Json
+        
+        # 检查进程是否还在运行
+        $downloaderRunning = Get-Process -Id $existingInfo.downloader_pid -ErrorAction SilentlyContinue
+        $botRunning = Get-Process -Id $existingInfo.bot_pid -ErrorAction SilentlyContinue
+        
+        if ($downloaderRunning -or $botRunning) {
+            Write-Host "⚠️  检测到已有实例在运行：" -ForegroundColor Yellow
+            if ($downloaderRunning) { Write-Host "  YouTube 下载器 (PID: $($existingInfo.downloader_pid))" -ForegroundColor Gray }
+            if ($botRunning) { Write-Host "  Telegram 机器人 (PID: $($existingInfo.bot_pid))" -ForegroundColor Gray }
+            Write-Host ""
+            Write-Host "请选择操作：" -ForegroundColor Yellow
+            Write-Host "  1. 停止现有实例并重新启动 (推荐)" -ForegroundColor White
+            Write-Host "  2. 继续启动 (可能导致冲突)" -ForegroundColor Red
+            Write-Host "  3. 取消启动" -ForegroundColor White
+            
+            $choice = Read-Host "请输入选择 (1-3)"
+            
+            switch ($choice) {
+                "1" {
+                    Write-Host "正在停止现有实例..." -ForegroundColor Cyan
+                    if ($downloaderRunning) { Stop-Process -Id $existingInfo.downloader_pid -Force -ErrorAction SilentlyContinue }
+                    if ($botRunning) { Stop-Process -Id $existingInfo.bot_pid -Force -ErrorAction SilentlyContinue }
+                    Start-Sleep 2
+                    Write-Host "现有实例已停止，即将重新启动..." -ForegroundColor Green
+                }
+                "3" {
+                    Write-Host "启动已取消" -ForegroundColor Yellow
+                    exit 0
+                }
+                default {
+                    Write-Host "继续启动，但可能会遇到冲突问题..." -ForegroundColor Red
+                }
+            }
+        }
+        else {
+            # 进程已不存在，删除过期的信息文件
+            Remove-Item $processInfoPath -Force -ErrorAction SilentlyContinue
+        }
+    }
+    catch {
+        Write-Host "无法读取现有进程信息，继续启动..." -ForegroundColor Yellow
+    }
+}
+
 # 进入源代码目录
 Push-Location src
 

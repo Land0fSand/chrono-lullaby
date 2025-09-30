@@ -1,6 +1,14 @@
+# -*- coding: utf-8 -*-
 import os
+import sys
 import math
 import ffmpeg # type: ignore
+
+# 设置默认编码为UTF-8
+if sys.stdout.encoding != 'utf-8':
+    sys.stdout.reconfigure(encoding='utf-8')
+if sys.stderr.encoding != 'utf-8':
+    sys.stderr.reconfigure(encoding='utf-8')
 from telegram.ext import ContextTypes
 from telegram.error import TimedOut, TelegramError
 from contextlib import suppress

@@ -1,4 +1,13 @@
+# -*- coding: utf-8 -*-
 import os
+import sys
+
+# 设置默认编码为UTF-8
+if sys.stdout.encoding != 'utf-8':
+    sys.stdout.reconfigure(encoding='utf-8')
+if sys.stderr.encoding != 'utf-8':
+    sys.stderr.reconfigure(encoding='utf-8')
+
 from dotenv import load_dotenv
 
 # 获取项目根目录

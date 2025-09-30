@@ -1,7 +1,16 @@
+# -*- coding: utf-8 -*-
 #!/usr/bin/env python
 import os
+import sys
 import time
 import logging
+
+# 设置默认编码为UTF-8
+if sys.stdout.encoding != 'utf-8':
+    sys.stdout.reconfigure(encoding='utf-8')
+if sys.stderr.encoding != 'utf-8':
+    sys.stderr.reconfigure(encoding='utf-8')
+
 from telegram.ext import Application, CommandHandler, ContextTypes
 from telegram.request import HTTPXRequest
 from telegram.error import NetworkError, TimedOut
@@ -29,9 +38,14 @@ async def send_file_task(context: ContextTypes.DEFAULT_TYPE) -> None:
     except Exception as e:
         logger.error(f"发送文件任务错误: {e}")
 
-def error_callback(update, context):
+async def error_callback(update, context):
     """全局错误处理器"""
     logger.error(f'Update "{update}" caused error "{context.error}"')
+    
+    # 如果是Bot冲突错误，尝试优雅处理
+    if "Conflict: terminated by other getUpdates request" in str(context.error):
+        logger.warning("检测到Bot实例冲突，可能有多个Bot在运行")
+        logger.info("建议使用 'ch-stop' 停止所有实例后重新启动")
 
 def main():
     # 增加超时设置，添加连接池配置
@@ -65,9 +79,6 @@ def main():
             logger.info(f"启动Telegram Bot轮询 (尝试 {retry_count + 1}/{max_retries})")
             application.run_polling(
                 drop_pending_updates=True,  # 忽略待处理的更新
-                timeout=60,  # 轮询超时
-                read_timeout=120,  # 读取超时
-                write_timeout=120,  # 写入超时
             )
             break  # 成功运行，退出重试循环
         except NetworkError as e:

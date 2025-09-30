@@ -1,8 +1,18 @@
+# -*- coding: utf-8 -*-
 #!/usr/bin/env python3
 """
 ChronoLullaby 启动器
 同时启动 YouTube 下载器和 Telegram 机器人
 """
+
+import os
+import sys
+
+# 设置默认编码为UTF-8
+if sys.stdout.encoding != 'utf-8':
+    sys.stdout.reconfigure(encoding='utf-8')
+if sys.stderr.encoding != 'utf-8':
+    sys.stderr.reconfigure(encoding='utf-8')
 
 import os
 import sys

@@ -1,6 +1,15 @@
+# -*- coding: utf-8 -*-
 import os
+import sys
 import random
 import time
+
+# 设置默认编码为UTF-8
+if sys.stdout.encoding != 'utf-8':
+    sys.stdout.reconfigure(encoding='utf-8')
+if sys.stderr.encoding != 'utf-8':
+    sys.stderr.reconfigure(encoding='utf-8')
+
 from dotenv import load_dotenv
 from task.dl_audio import dl_audio_latest
 from util import refresh_channels_from_file

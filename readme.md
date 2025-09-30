@@ -90,4 +90,90 @@ python src/main.py
 
 ---
 
+## 🚀 快速启动（推荐）
+
+### PowerShell 脚本管理（推荐）
+
+项目提供了完整的 PowerShell 脚本套件，支持一键启动和管理：
+
+```powershell
+# 启动服务（后台运行）
+.\ch.ps1
+
+# 查看状态
+.\ch-status.ps1
+
+# 查看日志
+.\ch-logs.ps1
+
+# 停止服务
+.\ch-stop.ps1
+```
+
+### 全局命令（安装后可在任意位置使用）
+
+将 `ch.ps1`、`ch-status.ps1`、`ch-logs.ps1`、`ch-stop.ps1` 复制到 PATH 目录后：
+
+```powershell
+# 在任何位置运行
+ch              # 启动服务
+ch-status       # 查看状态
+ch-logs         # 查看日志
+ch-stop         # 停止服务
+```
+
+### 传统启动方式
+
+```bash
+# 使用 Poetry（推荐）
+poetry install
+cd src
+poetry run python launcher.py
+
+# 或直接使用 Python
+python src/main.py
+```
+
+### 调试模式
+
+```powershell
+# 交互式启动（调试用）
+.\start-simple.ps1
+```
+
+---
+
+## 📋 脚本参数说明
+
+### ch-logs 命令参数
+
+```powershell
+# 查看所有日志（最近50行）
+ch-logs
+
+# 实时跟踪下载器日志
+ch-logs -Type downloader -Follow
+
+# 查看错误日志
+ch-logs -Type error
+
+# 列出所有日志文件
+ch-logs -List
+
+# 查看更多行数
+ch-logs -Lines 100
+```
+
+### 故障排除
+
+```powershell
+# 清理冲突进程
+.\ch-cleanup.ps1
+
+# 手动停止所有进程
+Get-Process *python* | Stop-Process -Force
+```
+
+---
+
 如需进一步定制或有其他问题，欢迎提交 issue 或联系作者。

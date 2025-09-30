@@ -1,19 +1,154 @@
+# -*- coding: utf-8 -*-
 import yt_dlp
 import os
 import datetime
 import json
 import sys
 import shutil
+import time
+import logging
+from typing import Optional
+
+# 设置默认编码为UTF-8
+if sys.stdout.encoding != 'utf-8':
+    sys.stdout.reconfigure(encoding='utf-8')
+if sys.stderr.encoding != 'utf-8':
+    sys.stderr.reconfigure(encoding='utf-8')
 from config import (
-    AUDIO_FOLDER, 
+    AUDIO_FOLDER,
     TEMP_AUDIO_FOLDER,
-    DOWNLOAD_ARCHIVE, 
-    DEBUG_INFO, 
+    DOWNLOAD_ARCHIVE,
+    DEBUG_INFO,
     STORY_FILE,
     COOKIES_FILE,
 )
 
+
+class TimestampedYTDLLogger:
+    """自定义yt-dlp日志处理器，添加时间戳"""
+
+    def __init__(self):
+        self._logger = logging.getLogger("yt-dlp")
+
+    def debug(self, msg):
+        self._logger.debug(msg)
+
+    def info(self, msg):
+        # 只处理yt-dlp的日志消息，跳过我们的print语句
+        if msg.strip():
+            print(f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {msg}")
+
+    def warning(self, msg):
+        if msg.strip():
+            print(f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] WARNING: {msg}")
+
+    def error(self, msg):
+        if msg.strip():
+            print(f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] ERROR: {msg}")
+
+    def critical(self, msg):
+        if msg.strip():
+            print(f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] CRITICAL: {msg}")
+
 yt_base_url = "https://www.youtube.com/"
+
+
+def safe_move_file(src, dst, max_retries=5):
+    """
+    安全移动文件，包含重试机制处理文件锁定问题
+    """
+    for attempt in range(max_retries):
+        try:
+            shutil.move(src, dst)
+            return True
+        except (OSError, PermissionError) as e:
+            if attempt < max_retries - 1:
+                print(f"    文件移动失败，重试 {attempt + 1}/{max_retries}: {e}")
+                time.sleep(0.5 * (attempt + 1))  # 递增延迟
+                continue
+            else:
+                print(f"    文件移动失败，已重试 {max_retries} 次: {e}")
+                # 尝试强制删除源文件
+                try:
+                    os.remove(src)
+                    print(f"    已删除无法移动的源文件: {src}")
+                except OSError:
+                    print(f"    无法删除源文件: {src}")
+                return False
+        except Exception as e:
+            print(f"    文件移动意外错误: {e}")
+            return False
+
+
+def member_content_filter(info_dict):
+    """过滤会员专属内容"""
+    try:
+        video_id = info_dict.get("id", "")
+        print(f"    过滤器检查视频: {video_id} - {info_dict.get('title', '未知标题')[:50]}...")
+
+        # 已知的会员视频ID列表
+        known_member_videos = [
+            "NeEjMRUgFBI",  # 这是日志中出现的会员视频
+            "QG_547yIt1Q"   # 这是日志中出现的会员视频
+        ]
+
+        if video_id in known_member_videos:
+            print(f"    跳过已知会员视频: {info_dict.get('title', '未知标题')} (ID: {video_id})")
+            return "已知会员视频"
+
+        # 检查视频描述中是否包含会员内容关键词
+        description = info_dict.get("description", "").lower()
+        title = info_dict.get("title", "").lower()
+
+        # 常见的会员内容关键词
+        member_keywords = [
+            "member", "members", "membership", "premium",
+            "exclusive", "会员", "专属", "付费",
+            "subscriber", "subscribers", "订阅", "订阅者",
+            "join", "access", "perks", "only", "exclusive",
+            "members-only", "members only"
+        ]
+
+        # 检查是否包含会员关键词
+        if any(keyword in description or keyword in title for keyword in member_keywords):
+            print(f"    跳过会员内容: {info_dict.get('title', '未知标题')}")
+            return "会员专属内容"
+
+        # 检查是否有会员相关字段
+        if info_dict.get("availability") == "subscriber_only":
+            print(f"    跳过会员专属视频: {info_dict.get('title', '未知标题')}")
+            return "会员专属内容"
+
+        # 检查是否为私人视频（会员视频通常标记为私人）
+        if info_dict.get("availability") == "private":
+            print(f"    跳过私人视频: {info_dict.get('title', '未知标题')}")
+            return "私人视频"
+
+        return None
+    except Exception as e:
+        print(f"    会员过滤器错误: {e}")
+        return None
+
+
+def combined_filter(info_dict):
+    """组合过滤器：同时应用时间过滤和会员内容过滤"""
+    try:
+        # 先检查会员内容过滤
+        member_result = member_content_filter(info_dict)
+        if member_result:
+            print(f"    过滤器跳过: {info_dict.get('title', '未知标题')} - {member_result}")
+            return member_result
+
+        # 再检查时间过滤
+        time_result = oneday_filter(info_dict)
+        if time_result:
+            print(f"    过滤器跳过: {info_dict.get('title', '未知标题')} - {time_result}")
+            return time_result
+
+        return None
+    except Exception as e:
+        print(f"    组合过滤器错误: {e}")
+        return None
 
 
 def oneday_filter(info_dict):
@@ -79,8 +214,9 @@ def get_ydl_opts(custom_opts=None):
         "format": "bestaudio/best",
         "outtmpl": {
             'default': os.path.join(TEMP_AUDIO_FOLDER, "%(uploader)s.%(fulltitle)s.%(ext)s"),
-            'aac': os.path.join(TEMP_AUDIO_FOLDER, "%(uploader)s.%(fulltitle)s.m4a"), 
+            'aac': os.path.join(TEMP_AUDIO_FOLDER, "%(uploader)s.%(fulltitle)s.m4a"),
         },
+        "logger": TimestampedYTDLLogger(),  # 使用自定义日志格式
         "postprocessors": [
             {
                 "key": "FFmpegExtractAudio",
@@ -92,7 +228,7 @@ def get_ydl_opts(custom_opts=None):
         "sleep_interval": 88,
         "max_sleep_interval": 208,
         "random_sleep": True,
-        "ignoreerrors": False,
+        "ignoreerrors": False,  # 改为False，让过滤器处理会员内容
         "format_sort": ["+hasaud", "+hasvid", "+codec:opus", "+codec:aac", "+codec:mp3"],
         "format_fallback": True,
         "progress_hooks": [progress_hook],
@@ -163,7 +299,7 @@ def dl_audio_latest(channel_name):
     custom_opts = {
         "download_archive": DOWNLOAD_ARCHIVE,
         "playlistend": 6,
-        "match_filter": oneday_filter,
+        "match_filter": combined_filter,
         "keepvideo": False, 
     }
     
@@ -231,8 +367,10 @@ def dl_audio_latest(channel_name):
                     if os.path.exists(expected_temp_audio_path):
                         print(f"    转换后音频已在临时目录: {expected_temp_audio_path}")
                         print(f"    准备移动到: {final_destination_audio_path}")
-                        shutil.move(expected_temp_audio_path, final_destination_audio_path)
-                        print(f"    成功移动到: {final_destination_audio_path}")
+                        if safe_move_file(expected_temp_audio_path, final_destination_audio_path):
+                            print(f"    成功移动到: {final_destination_audio_path}")
+                        else:
+                            print(f"    移动失败，跳过此文件")
                     else:
                         print(f"错误: 转换后的音频文件 {expected_temp_audio_path} 在临时目录中未找到！")
                         original_downloaded_file_actual_ext = None
@@ -246,14 +384,17 @@ def dl_audio_latest(channel_name):
                              print(f"      原始下载文件也未找到 (尝试的模板: {temp_audio_path_without_ext}.*)")
 
                 except yt_dlp.utils.DownloadError as de:
-                    if "already been recorded in the archive" in str(de):
+                    error_str = str(de)
+                    if "already been recorded in the archive" in error_str:
                         print(f"  视频已在存档中记录，跳过: {video_info.get('title', '未知标题')}")
+                    elif "members-only" in error_str or "member" in error_str or "premium" in error_str or "subscriber" in error_str:
+                        print(f"  跳过会员专属视频: {video_info.get('title', '未知标题')}")
                     else:
                         print(f"  下载视频 {video_info.get('title', '未知标题')} 时发生 yt-dlp DownloadError: {str(de)}")
                     if os.path.exists(expected_temp_audio_path):
                         try: os.remove(expected_temp_audio_path); print(f"    已清理部分下载的音频文件: {expected_temp_audio_path}")
                         except OSError: pass
-                    for ext_try in ['.webm', '.mp4', '.mkv']: 
+                    for ext_try in ['.webm', '.mp4', '.mkv']:
                         potential_orig_file = temp_audio_path_without_ext + ext_try
                         if os.path.exists(potential_orig_file):
                             try: os.remove(potential_orig_file); print(f"    已清理部分下载的视频文件: {potential_orig_file}")
@@ -418,8 +559,10 @@ def dl_audio_closest_after(au_folder, channel_name, target_timestamp=None):
 
             if os.path.exists(expected_temp_audio_path):
                 print(f"    历史视频转换后音频已在临时目录: {expected_temp_audio_path}")
-                shutil.move(expected_temp_audio_path, final_destination_audio_path)
-                print(f"    成功将历史视频音频移动到: {final_destination_audio_path}")
+                if safe_move_file(expected_temp_audio_path, final_destination_audio_path):
+                    print(f"    成功将历史视频音频移动到: {final_destination_audio_path}")
+                else:
+                    print(f"    历史视频移动失败，跳过此文件")
 
                 timestamp_to_update = closest_video.get("timestamp", closest_video.get("upload_date"))
                 if timestamp_to_update:
