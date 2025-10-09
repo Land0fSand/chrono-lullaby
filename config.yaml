@@ -1,0 +1,139 @@
+# ChronoLullaby 配置文件
+# 
+# 说明：
+#   - 此文件为示例配置，复制为 config.yaml 后填入真实值
+#   - 使用 # 开头的行为注释
+#   - 如果不存在 config.yaml，程序会回退到使用 channels.txt 和 .env
+
+# ============================================================
+# Telegram Bot 配置
+# ============================================================
+telegram:
+  # 全局 Bot Token（从 @BotFather 获取）
+  # 如果所有频道组共用一个 bot，在这里配置
+  # 如果每个频道组使用独立的 bot，可以留空，在各组中配置
+  bot_token: "8039387573:AAFh77N4phZwde25FJIVs5J6ekQZFXyDRNA"
+  
+  # 发送文件任务间隔（秒）
+  # 默认 4920 秒 = 1小时22分钟
+  send_interval: 4920
+
+# ============================================================
+# YouTube 下载器配置
+# ============================================================
+downloader:
+  # 下载轮次间隔（秒）
+  # 默认 29520 秒 = 约 8.2 小时
+  download_interval: 29520
+  
+  # YouTube Cookies 文件路径（用于访问会员内容等）
+  cookies_file: "youtube.cookies"
+  
+  # 下载存档文件（记录已下载的视频，避免重复下载）
+  download_archive: "download_archive.txt"
+  
+  # 视频过滤：只下载最近 N 天的视频
+  filter_days: 3
+  
+  # 每个频道检查的最大视频数
+  max_videos_per_channel: 6
+
+# ============================================================
+# 频道组配置
+# 
+# 注意：阶段1（当前版本）只支持单个频道组
+#       将来会支持多组配置，每组对应不同的 Telegram 频道
+# ============================================================
+channel_groups:
+  # 主频道组
+  - name: "主频道"
+    description: "所有订阅的 YouTube 频道"
+    
+    # Bot Token（可选）
+    # 如果此组使用独立的 bot，在这里配置
+    # 如果不配置，将使用全局 telegram.bot_token
+    # bot_token: "此组专用的_BOT_TOKEN"
+    
+    # Telegram 聊天 ID（频道/群组）
+    # 使用 /start 命令或让bot接收消息来获取 chat_id
+    telegram_chat_id: "-1002441077579"
+    
+    # 音频文件存储目录
+    audio_folder: "au"
+    
+    # YouTube 频道列表
+    youtube_channels:
+      - "@StorytellerFan"
+      - "@meowsir"
+      - "@wuyuesanren"
+      - "@ltshijie"
+      - "@WuJianMin"
+      - "@wenzhaoofficial"
+      - "@LiuZhongjing1974"
+      - "@agl"
+      - "@SydneyDaddy1"
+      - "@liuzhongjing"
+      - "@captainst"
+      - "@user-lq6gy7ob2p"
+      - "@polishingtheturd6859"
+      - "@leonard2834"
+      - "@wentingting"
+      - "@JeffTechView"
+      - "@Lifeano"
+      - "@Mr.F"
+      - "@wangzhian"
+      - "@afengbrother001"
+      - "@Guangrui"
+      - "@NewDecameron"
+      - "@MrMarmot8"
+      - "@whyyoutouzhele"
+      - "@cui_news"
+      - "@BEWATER666"
+      - "@ChanChanTalk"
+      - "@liaozhengshier"
+      - "@Tankman2020"
+      - "@bestpartners"
+      - "@wenzhaostudio"
+      - "@夸克说"
+      - "@纪实风云"
+      - "@--sciencefiction7017"
+      - "@dlw2023"
+
+# ============================================================
+# 将来的多组配置示例（阶段2）
+# ============================================================
+# 
+# 示例1：所有组共用一个 Bot（推荐，简单）
+# telegram:
+#   bot_token: "统一的_BOT_TOKEN"  # 一个bot管理所有频道
+# 
+# channel_groups:
+#   - name: "技术频道"
+#     telegram_chat_id: "-1001111111111"  # 不同的频道
+#     audio_folder: "au/tech"
+#     youtube_channels: ["@JeffTechView"]
+#   
+#   - name: "时事频道"
+#     telegram_chat_id: "-1002222222222"  # 不同的频道
+#     audio_folder: "au/news"
+#     youtube_channels: ["@wenzhaoofficial"]
+# 
+# ============================================================
+# 
+# 示例2：每组使用独立的 Bot（完全隔离）
+# telegram:
+#   bot_token: ""  # 可以留空，各组独立配置
+# 
+# channel_groups:
+#   - name: "技术频道"
+#     bot_token: "技术频道专用的_BOT_TOKEN"  # 独立bot
+#     telegram_chat_id: "-1001111111111"
+#     audio_folder: "au/tech"
+#     youtube_channels: ["@JeffTechView"]
+#   
+#   - name: "时事频道"
+#     bot_token: "时事频道专用的_BOT_TOKEN"  # 独立bot
+#     telegram_chat_id: "-1002222222222"
+#     audio_folder: "au/news"
+#     youtube_channels: ["@wenzhaoofficial"]
+

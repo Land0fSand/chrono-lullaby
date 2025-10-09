@@ -13,16 +13,19 @@ if sys.stderr.encoding != 'utf-8':
 from dotenv import load_dotenv
 from task.dl_audio import dl_audio_latest
 from util import refresh_channels_from_file
-from config import ENV_FILE
+from config import ENV_FILE, get_download_interval
 from logger import get_logger, log_with_context
 import logging
 
 # 使用统一的日志系统
 logger = get_logger('downloader', separate_error_file=True)
 
+# 加载环境变量（如果使用传统配置）
 load_dotenv(ENV_FILE)
 
-SPEEDRUN = 1 * 60 * 60 + 22 * 60
+# 从配置获取下载间隔
+DOWNLOAD_INTERVAL = get_download_interval()
+logger.info(f"下载间隔配置：{DOWNLOAD_INTERVAL} 秒 ({DOWNLOAD_INTERVAL/3600:.2f} 小时)")
 
 def dl_youtube(channels) -> None:
     """下载 YouTube 频道的音频"""
@@ -70,7 +73,7 @@ def main():
             
             dl_youtube(channels)
             
-            wait_time = SPEEDRUN * 6
+            wait_time = DOWNLOAD_INTERVAL
             log_with_context(
                 logger,
                 logging.INFO,

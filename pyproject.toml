@@ -16,8 +16,9 @@ yt-dlp = "^2025.8.22"
 ffmpeg-python = "^0.2.0"
 pydub = "^0.25.1"
 python-dotenv = "^1.0.1"
-python-telegram-bot = {extras = ["job-queue"], version = "^20.0"}
+python-telegram-bot = {extras = ["job-queue"], version = "^22.0"}
 browser-cookie3 = "^0.19.1"
+PyYAML = "^6.0"
 
 [tool.poetry.group.dev.dependencies]
 # 可选：开发依赖（如测试工具），目前留空

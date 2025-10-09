@@ -120,23 +120,39 @@ def member_content_filter(info_dict):
         description = info_dict.get("description", "").lower()
         title = info_dict.get("title", "").lower()
 
-        # 常见的会员内容关键词
-        member_keywords = [
-            "member", "members", "membership", "premium",
-            "exclusive", "会员", "专属", "付费",
-            "subscriber", "subscribers", "订阅", "订阅者",
-            "join", "access", "perks", "only", "exclusive",
-            "members-only", "members only"
+        # 会员内容关键词 - 使用更精确的匹配
+        # 分为高优先级（确定是会员内容）和低优先级（需要更多上下文）
+        high_priority_keywords = [
+            "members-only", "members only", "member-only", "member only",
+            "membership exclusive", "premium members", "subscriber exclusive",
+            "会员专属", "付费会员", "订阅者专属"
+        ]
+        
+        low_priority_keywords = [
+            "membership", "premium content",
+            "exclusive access", "subscriber perks",
+            "会员", "专属内容", "付费内容"
         ]
 
-        # 检查是否包含会员关键词
-        if any(keyword in description or keyword in title for keyword in member_keywords):
-            log_with_context(
-                logger, logging.INFO,
-                "跳过会员内容",
-                video_id=video_id, title=video_title
-            )
-            return "会员专属内容"
+        # 先检查高优先级关键词（确定性强）
+        for keyword in high_priority_keywords:
+            if keyword in description.lower() or keyword in title.lower():
+                log_with_context(
+                    logger, logging.INFO,
+                    "跳过会员内容",
+                    video_id=video_id, title=video_title, keyword=keyword
+                )
+                return "会员专属内容"
+        
+        # 低优先级关键词只在描述中检查，不在标题中检查（减少误判）
+        for keyword in low_priority_keywords:
+            if keyword in description.lower():
+                log_with_context(
+                    logger, logging.INFO,
+                    "跳过疑似会员内容",
+                    video_id=video_id, title=video_title, keyword=keyword
+                )
+                return "会员专属内容"
 
         # 检查是否有会员相关字段
         if info_dict.get("availability") == "subscriber_only":
@@ -252,11 +268,12 @@ def get_ydl_opts(custom_opts=None):
         logger.info(f"已创建音频目录: {AUDIO_FOLDER}")
 
     # 使用 .tmp 后缀来标记正在下载的文件
+    # FFmpeg后处理器会在outtmpl指定的文件名后自动添加扩展名，最终格式：filename.tmp.m4a
     base_opts = {
         "format": "bestaudio/best",
         "outtmpl": {
             'default': os.path.join(AUDIO_FOLDER, "%(uploader)s.%(fulltitle)s.%(ext)s.tmp"),
-            'aac': os.path.join(AUDIO_FOLDER, "%(uploader)s.%(fulltitle)s.m4a.tmp"),
+            'aac': os.path.join(AUDIO_FOLDER, "%(uploader)s.%(fulltitle)s.tmp"),  # FFmpeg会自动添加.m4a
         },
         "logger": TimestampedYTDLLogger(),  # 使用自定义日志格式
         "postprocessors": [
@@ -264,8 +281,10 @@ def get_ydl_opts(custom_opts=None):
                 "key": "FFmpegExtractAudio",
                 "preferredcodec": "aac",
                 "preferredquality": "64",
+                "nopostoverwrites": False,
             }
         ],
+        "keepvideo": False,  # 不保留原始视频文件
         "cookiefile": COOKIES_FILE,
         "sleep_interval": 88,
         "max_sleep_interval": 208,
@@ -381,12 +400,14 @@ def dl_audio_latest(channel_name):
             if channel_info.get('_type') == 'playlist':
                 for video_playlist_entry in channel_info.get('entries', []):
                     if video_playlist_entry and video_playlist_entry.get('_type') == 'playlist':
-                        for video_in_playlist in video_playlist_entry.get('entries', []):
+                        # 确保 entries 不为 None
+                        nested_entries = video_playlist_entry.get('entries') or []
+                        for video_in_playlist in nested_entries:
                              if video_in_playlist: entries_to_download.append(video_in_playlist)
                     elif video_playlist_entry:
                         entries_to_download.append(video_playlist_entry)
             else:
-                entries_to_download = channel_info.get('entries', [])
+                entries_to_download = channel_info.get('entries') or []
             
             # 记录找到的视频总数
             stats['total'] = len(entries_to_download)
@@ -425,8 +446,8 @@ def dl_audio_latest(channel_name):
                     url=video_url
                 )
                 
-                uploader = video_info.get('uploader', 'UnknownUploader')
-                fulltitle = video_info.get('fulltitle', video_info.get('title', 'UnknownTitle'))
+                uploader = video_info.get('uploader') or 'UnknownUploader'
+                fulltitle = video_info.get('fulltitle') or video_info.get('title') or 'UnknownTitle'
                 safe_title = "".join(c if c.isalnum() or c in " .-_()" else "_" for c in fulltitle)
                 safe_uploader = "".join(c if c.isalnum() or c in " .-_()" else "_" for c in uploader)
 
@@ -434,6 +455,7 @@ def dl_audio_latest(channel_name):
                 final_audio_filename_stem = f"{safe_uploader}.{safe_title}"
                 
                 # 临时文件使用 .tmp 后缀
+                # 注意：FFmpegExtractAudio 实际输出格式是 .m4a.tmp（不是.tmp.m4a）
                 temp_audio_path_without_ext = os.path.join(AUDIO_FOLDER, final_audio_filename_stem)
                 expected_temp_audio_path = temp_audio_path_without_ext + expected_audio_ext + ".tmp"
 
@@ -463,7 +485,7 @@ def dl_audio_latest(channel_name):
                 current_video_ydl_opts = ydl_opts.copy()
                 current_video_ydl_opts['outtmpl'] = {
                     'default': temp_audio_path_without_ext + '.%(ext)s.tmp',
-                    'aac': temp_audio_path_without_ext + expected_audio_ext + '.tmp'
+                    'aac': temp_audio_path_without_ext + '.tmp'  # FFmpeg会自动添加.m4a
                 }
 
                 log_with_context(
@@ -687,12 +709,15 @@ def dl_audio_latest(channel_name):
                     )
         
         except Exception as e:
+            import traceback
+            traceback_str = ''.join(traceback.format_tb(e.__traceback__))
             log_with_context(
                 logger, logging.ERROR,
                 "处理频道时发生错误",
                 channel=channel_name,
                 error=str(e),
-                error_type=type(e).__name__
+                error_type=type(e).__name__,
+                traceback=traceback_str
             )
             if "HTTP Error 404" in str(e):
                 logger.error(f"频道 {channel_name} 不存在或无法访问，请检查频道名称是否正确。")
@@ -777,12 +802,14 @@ def dl_audio_closest_after(au_folder, channel_name, target_timestamp=None):
             if info_dict.get('_type') == 'playlist':
                  for entry_playlist in info_dict.get('entries', []):
                     if entry_playlist and entry_playlist.get('_type') == 'playlist':
-                        for video_in_playlist in entry_playlist.get('entries', []):
+                        # 确保 entries 不为 None
+                        nested_entries = entry_playlist.get('entries') or []
+                        for video_in_playlist in nested_entries:
                              if video_in_playlist: processed_videos_for_closest.append(video_in_playlist)
                     elif entry_playlist:
                         processed_videos_for_closest.append(entry_playlist)
             else:
-                processed_videos_for_closest = info_dict.get('entries', [])
+                processed_videos_for_closest = info_dict.get('entries') or []
 
             for video_data in processed_videos_for_closest:
                 video_timestamp = video_data.get("timestamp")
@@ -821,14 +848,15 @@ def dl_audio_closest_after(au_folder, channel_name, target_timestamp=None):
                 title=closest_video.get('title', '未知标题')
             )
 
-            uploader = closest_video.get('uploader', 'UnknownUploader')
-            fulltitle = closest_video.get('fulltitle', closest_video.get('title', 'UnknownTitle'))
+            uploader = closest_video.get('uploader') or 'UnknownUploader'
+            fulltitle = closest_video.get('fulltitle') or closest_video.get('title') or 'UnknownTitle'
             safe_title = "".join(c if c.isalnum() or c in " .-_()" else "_" for c in fulltitle)
             safe_uploader = "".join(c if c.isalnum() or c in " .-_()" else "_" for c in uploader)
             expected_audio_ext = ".m4a"
             final_audio_filename_stem = f"{safe_uploader}.{safe_title}"
 
             # 临时文件使用 .tmp 后缀
+            # 注意：FFmpegExtractAudio 实际输出格式是 .m4a.tmp（不是.tmp.m4a）
             temp_audio_path_without_ext = os.path.join(au_folder, final_audio_filename_stem)
             expected_temp_audio_path = temp_audio_path_without_ext + expected_audio_ext + ".tmp"
             final_destination_audio_path = os.path.join(au_folder, f"{final_audio_filename_stem}{expected_audio_ext}")
@@ -845,7 +873,7 @@ def dl_audio_closest_after(au_folder, channel_name, target_timestamp=None):
             single_video_ydl_opts = ydl_opts.copy()
             single_video_ydl_opts['outtmpl'] = {
                 'default': temp_audio_path_without_ext + '.%(ext)s.tmp',
-                'aac': temp_audio_path_without_ext + expected_audio_ext + '.tmp'
+                'aac': temp_audio_path_without_ext + '.tmp'  # FFmpeg会自动添加.m4a
             }
             single_video_ydl_opts.pop('playlistend', None) 
             single_video_ydl_opts.pop('match_filter', None)

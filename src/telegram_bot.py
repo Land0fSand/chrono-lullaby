@@ -16,17 +16,38 @@ from telegram.error import NetworkError, TimedOut
 from dotenv import load_dotenv
 from task.send_file import send_file
 from commands.add_channel import add_channel
-from config import AUDIO_FOLDER, ENV_FILE
+from config import (
+    AUDIO_FOLDER, 
+    ENV_FILE,
+    get_telegram_token,
+    get_telegram_chat_id,
+    get_send_interval,
+)
 from logger import get_logger
 
 # 使用统一的日志系统
 logger = get_logger('bot', separate_error_file=True)
 
+# 加载环境变量（如果使用传统配置）
 load_dotenv(ENV_FILE)
 
-SPEEDRUN = 1 * 60 * 60 + 22 * 60
-TOKEN = os.environ.get("BOT_TOKEN")
-CHAT_ID = os.environ.get("CHAT_ID")
+# 从配置获取参数（优先 YAML，回退到 .env）
+TOKEN = get_telegram_token()
+CHAT_ID = get_telegram_chat_id()
+SEND_INTERVAL = get_send_interval()
+
+# 验证必需的配置
+if not TOKEN:
+    logger.error("❌ 未找到 BOT_TOKEN 配置！")
+    logger.error("请在 config.yaml 或 .env 文件中配置 BOT_TOKEN")
+    sys.exit(1)
+
+if not CHAT_ID:
+    logger.error("❌ 未找到 CHAT_ID 配置！")
+    logger.error("请在 config.yaml 或 .env 文件中配置 CHAT_ID")
+    sys.exit(1)
+
+logger.info(f"配置加载成功：发送间隔 = {SEND_INTERVAL} 秒 ({SEND_INTERVAL/3600:.2f} 小时)")
 
 async def send_file_task(context: ContextTypes.DEFAULT_TYPE) -> None:
     try:
@@ -59,11 +80,14 @@ def main():
     # 添加错误处理器
     application.add_error_handler(error_callback)
     
+    # 使用配置的发送间隔
+    # 将间隔除以32作为实际间隔，首次运行延迟为间隔的1/256
     application.job_queue.run_repeating(
         send_file_task,
-        interval=SPEEDRUN // 32,
-        first=SPEEDRUN // 256,
+        interval=SEND_INTERVAL // 32,
+        first=SEND_INTERVAL // 256,
     )
+    logger.info(f"文件发送任务已配置：每 {SEND_INTERVAL // 32} 秒检查一次")
     application.add_handler(CommandHandler("addchannel", add_channel))
     
     # 添加重试机制的轮询
