@@ -4,7 +4,6 @@ import os
 import datetime
 import json
 import sys
-import shutil
 import time
 import logging
 from typing import Optional
@@ -17,7 +16,6 @@ if sys.stderr.encoding != 'utf-8':
 
 from config import (
     AUDIO_FOLDER,
-    TEMP_AUDIO_FOLDER,
     DOWNLOAD_ARCHIVE,
     DEBUG_INFO,
     STORY_FILE,
@@ -58,19 +56,19 @@ class TimestampedYTDLLogger:
 yt_base_url = "https://www.youtube.com/"
 
 
-def safe_move_file(src, dst, max_retries=5):
+def safe_rename_file(src, dst, max_retries=5):
     """
-    安全移动文件，包含重试机制处理文件锁定问题
+    安全重命名文件（从.tmp到正式文件名），包含重试机制处理文件锁定问题
     """
     for attempt in range(max_retries):
         try:
-            shutil.move(src, dst)
+            os.rename(src, dst)
             return True
         except (OSError, PermissionError) as e:
             if attempt < max_retries - 1:
                 log_with_context(
                     logger, logging.WARNING,
-                    "文件移动失败，准备重试",
+                    "文件重命名失败，准备重试",
                     src=src, dst=dst, attempt=attempt + 1, max_retries=max_retries, error=str(e)
                 )
                 time.sleep(0.5 * (attempt + 1))  # 递增延迟
@@ -78,20 +76,20 @@ def safe_move_file(src, dst, max_retries=5):
             else:
                 log_with_context(
                     logger, logging.ERROR,
-                    "文件移动失败，已达最大重试次数",
+                    "文件重命名失败，已达最大重试次数",
                     src=src, dst=dst, max_retries=max_retries, error=str(e)
                 )
-                # 尝试强制删除源文件
+                # 尝试强制删除临时文件
                 try:
                     os.remove(src)
-                    logger.warning(f"已删除无法移动的源文件: {src}")
+                    logger.warning(f"已删除无法重命名的临时文件: {src}")
                 except OSError:
-                    logger.error(f"无法删除源文件: {src}")
+                    logger.error(f"无法删除临时文件: {src}")
                 return False
         except Exception as e:
             log_with_context(
                 logger, logging.ERROR,
-                "文件移动意外错误",
+                "文件重命名意外错误",
                 src=src, dst=dst, error=str(e), error_type=type(e).__name__
             )
             return False
@@ -248,15 +246,17 @@ def check_cookies():
 
 
 def get_ydl_opts(custom_opts=None):
-    if not os.path.exists(TEMP_AUDIO_FOLDER):
-        os.makedirs(TEMP_AUDIO_FOLDER)
-        logger.info(f"已创建临时下载目录: {TEMP_AUDIO_FOLDER}")
+    # 确保音频文件夹存在
+    if not os.path.exists(AUDIO_FOLDER):
+        os.makedirs(AUDIO_FOLDER)
+        logger.info(f"已创建音频目录: {AUDIO_FOLDER}")
 
+    # 使用 .tmp 后缀来标记正在下载的文件
     base_opts = {
         "format": "bestaudio/best",
         "outtmpl": {
-            'default': os.path.join(TEMP_AUDIO_FOLDER, "%(uploader)s.%(fulltitle)s.%(ext)s"),
-            'aac': os.path.join(TEMP_AUDIO_FOLDER, "%(uploader)s.%(fulltitle)s.m4a"),
+            'default': os.path.join(AUDIO_FOLDER, "%(uploader)s.%(fulltitle)s.%(ext)s.tmp"),
+            'aac': os.path.join(AUDIO_FOLDER, "%(uploader)s.%(fulltitle)s.m4a.tmp"),
         },
         "logger": TimestampedYTDLLogger(),  # 使用自定义日志格式
         "postprocessors": [
@@ -433,9 +433,11 @@ def dl_audio_latest(channel_name):
                 expected_audio_ext = ".m4a"
                 final_audio_filename_stem = f"{safe_uploader}.{safe_title}"
                 
-                temp_audio_path_without_ext = os.path.join(TEMP_AUDIO_FOLDER, final_audio_filename_stem)
-                expected_temp_audio_path = temp_audio_path_without_ext + expected_audio_ext
+                # 临时文件使用 .tmp 后缀
+                temp_audio_path_without_ext = os.path.join(AUDIO_FOLDER, final_audio_filename_stem)
+                expected_temp_audio_path = temp_audio_path_without_ext + expected_audio_ext + ".tmp"
 
+                # 正式文件路径（不带 .tmp）
                 final_destination_audio_path = os.path.join(AUDIO_FOLDER, f"{final_audio_filename_stem}{expected_audio_ext}")
 
                 if os.path.exists(final_destination_audio_path):
@@ -460,14 +462,14 @@ def dl_audio_latest(channel_name):
                 
                 current_video_ydl_opts = ydl_opts.copy()
                 current_video_ydl_opts['outtmpl'] = {
-                    'default': temp_audio_path_without_ext + '.%(ext)s',
-                    'aac': temp_audio_path_without_ext + expected_audio_ext
+                    'default': temp_audio_path_without_ext + '.%(ext)s.tmp',
+                    'aac': temp_audio_path_without_ext + expected_audio_ext + '.tmp'
                 }
 
                 log_with_context(
                     logger, logging.DEBUG,
                     "下载路径配置",
-                    temp_template=f"{temp_audio_path_without_ext}.%(ext)s",
+                    temp_template=f"{temp_audio_path_without_ext}.%(ext)s.tmp",
                     expected_temp=expected_temp_audio_path,
                     final_destination=final_destination_audio_path
                 )
@@ -491,8 +493,8 @@ def dl_audio_latest(channel_name):
                         video_ydl.download([video_url]) 
                     
                     if os.path.exists(expected_temp_audio_path):
-                        logger.info(f"转换后音频已在临时目录: {expected_temp_audio_path}")
-                        if safe_move_file(expected_temp_audio_path, final_destination_audio_path):
+                        logger.info(f"转换后音频已下载（临时文件）: {expected_temp_audio_path}")
+                        if safe_rename_file(expected_temp_audio_path, final_destination_audio_path):
                             file_size_mb = os.path.getsize(final_destination_audio_path) / (1024 * 1024)
                             log_with_context(
                                 logger, logging.INFO,
@@ -516,7 +518,7 @@ def dl_audio_latest(channel_name):
                         else:
                             log_with_context(
                                 logger, logging.ERROR,
-                                "❌ 视频下载失败 - 文件移动失败",
+                                "❌ 视频下载失败 - 文件重命名失败",
                                 channel=channel_name,
                                 video_index=f"{idx}/{stats['total']}",
                                 title=video_title,
@@ -528,7 +530,7 @@ def dl_audio_latest(channel_name):
                                 'title': video_title,
                                 'id': video_id,
                                 'status': 'error',
-                                'reason': '文件移动失败'
+                                'reason': '文件重命名失败'
                             })
                     else:
                         log_with_context(
@@ -542,13 +544,13 @@ def dl_audio_latest(channel_name):
                         )
                         original_downloaded_file_actual_ext = None
                         for ext_try in ['.webm', '.mp4', '.mkv', '.flv', '.avi', '.mov', '.opus', '.ogg', '.mp3']:
-                            potential_orig_file = temp_audio_path_without_ext + ext_try
+                            potential_orig_file = temp_audio_path_without_ext + ext_try + '.tmp'
                             if os.path.exists(potential_orig_file):
                                 original_downloaded_file_actual_ext = ext_try
                                 logger.warning(f"找到原始下载文件: {potential_orig_file}，但未转换为 {expected_audio_ext}")
                                 break
                         if not original_downloaded_file_actual_ext:
-                             logger.error(f"原始下载文件也未找到 (尝试的模板: {temp_audio_path_without_ext}.*)")
+                             logger.error(f"原始下载文件也未找到 (尝试的模板: {temp_audio_path_without_ext}.*.tmp)")
                         
                         stats['error'] += 1
                         stats['details'].append({
@@ -619,7 +621,7 @@ def dl_audio_latest(channel_name):
                             logger.debug(f"已清理部分下载的音频文件: {expected_temp_audio_path}")
                         except OSError: pass
                     for ext_try in ['.webm', '.mp4', '.mkv']:
-                        potential_orig_file = temp_audio_path_without_ext + ext_try
+                        potential_orig_file = temp_audio_path_without_ext + ext_try + '.tmp'
                         if os.path.exists(potential_orig_file):
                             try:
                                 os.remove(potential_orig_file)
@@ -826,8 +828,9 @@ def dl_audio_closest_after(au_folder, channel_name, target_timestamp=None):
             expected_audio_ext = ".m4a"
             final_audio_filename_stem = f"{safe_uploader}.{safe_title}"
 
-            temp_audio_path_without_ext = os.path.join(TEMP_AUDIO_FOLDER, final_audio_filename_stem)
-            expected_temp_audio_path = temp_audio_path_without_ext + expected_audio_ext
+            # 临时文件使用 .tmp 后缀
+            temp_audio_path_without_ext = os.path.join(au_folder, final_audio_filename_stem)
+            expected_temp_audio_path = temp_audio_path_without_ext + expected_audio_ext + ".tmp"
             final_destination_audio_path = os.path.join(au_folder, f"{final_audio_filename_stem}{expected_audio_ext}")
 
             if os.path.exists(final_destination_audio_path):
@@ -841,8 +844,8 @@ def dl_audio_closest_after(au_folder, channel_name, target_timestamp=None):
 
             single_video_ydl_opts = ydl_opts.copy()
             single_video_ydl_opts['outtmpl'] = {
-                'default': temp_audio_path_without_ext + '.%(ext)s',
-                'aac': temp_audio_path_without_ext + expected_audio_ext
+                'default': temp_audio_path_without_ext + '.%(ext)s.tmp',
+                'aac': temp_audio_path_without_ext + expected_audio_ext + '.tmp'
             }
             single_video_ydl_opts.pop('playlistend', None) 
             single_video_ydl_opts.pop('match_filter', None)
@@ -851,15 +854,15 @@ def dl_audio_closest_after(au_folder, channel_name, target_timestamp=None):
                 single_video_downloader.download([video_webpage_url])
 
             if os.path.exists(expected_temp_audio_path):
-                logger.info(f"历史视频转换后音频已在临时目录: {expected_temp_audio_path}")
-                if safe_move_file(expected_temp_audio_path, final_destination_audio_path):
+                logger.info(f"历史视频转换后音频已下载（临时文件）: {expected_temp_audio_path}")
+                if safe_rename_file(expected_temp_audio_path, final_destination_audio_path):
                     log_with_context(
                         logger, logging.INFO,
-                        "成功移动历史视频音频",
+                        "成功重命名历史视频音频",
                         destination=final_destination_audio_path
                     )
                 else:
-                    logger.error(f"历史视频移动失败，跳过此文件")
+                    logger.error(f"历史视频重命名失败，跳过此文件")
 
                 timestamp_to_update = closest_video.get("timestamp", closest_video.get("upload_date"))
                 if timestamp_to_update:
@@ -868,7 +871,7 @@ def dl_audio_closest_after(au_folder, channel_name, target_timestamp=None):
                     update_channel_info_file(channel_name, timestamp_to_update, STORY_FILE)
                 return True
             else:
-                logger.error(f"历史视频转换后的音频文件在临时目录中未找到: {expected_temp_audio_path}")
+                logger.error(f"历史视频转换后的音频文件（临时文件）未找到: {expected_temp_audio_path}")
                 return False
             
         except Exception as e:
