@@ -24,11 +24,12 @@ async def send_file(context: ContextTypes.DEFAULT_TYPE, chat_id, audio_folder) -
     if not os.path.exists(audio_folder):
         logger.warning(f"音频文件夹不存在: {audio_folder}")
         return
-    # 过滤掉隐藏文件和临时文件(.tmp后缀)
+    # 过滤掉隐藏文件和临时文件(.tmp后缀或包含.tmp.)
     files = [f for f in os.listdir(audio_folder) 
              if os.path.isfile(os.path.join(audio_folder, f)) 
              and not f.startswith('.') 
-             and not f.endswith('.tmp')]
+             and not f.endswith('.tmp')
+             and '.tmp.' not in f]  # 也过滤掉 .tmp.m4a 这种格式
     if not files:
         logger.debug("没有找到音频文件")
         return
