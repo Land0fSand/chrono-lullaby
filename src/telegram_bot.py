@@ -3,7 +3,6 @@
 import os
 import sys
 import time
-import logging
 
 # 设置默认编码为UTF-8
 if sys.stdout.encoding != 'utf-8':
@@ -18,13 +17,10 @@ from dotenv import load_dotenv
 from task.send_file import send_file
 from commands.add_channel import add_channel
 from config import AUDIO_FOLDER, ENV_FILE
+from logger import get_logger
 
-# 设置日志记录
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
-)
-logger = logging.getLogger(__name__)
+# 使用统一的日志系统
+logger = get_logger('bot', separate_error_file=True)
 
 load_dotenv(ENV_FILE)
 
@@ -55,7 +51,7 @@ def main():
         connect_timeout=60,  # 连接超时
         pool_timeout=60,  # 连接池超时
         connection_pool_size=8,  # 连接池大小
-        proxy_url=None,  # 如果需要代理，在这里设置
+        # proxy_url 参数在新版本中已移除，如需代理请使用 httpx 的方式配置
     )
     
     application = Application.builder().token(TOKEN).request(request).build()

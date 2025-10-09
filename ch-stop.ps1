@@ -232,21 +232,34 @@ else {
 }
 
 # 清理日志文件（如果有权限问题）
+Write-Host "🧹 等待进程完全退出..." -ForegroundColor Cyan
+Start-Sleep -Seconds 2  # 等待进程释放文件句柄
+
 Write-Host "🧹 尝试清理日志文件..." -ForegroundColor Cyan
 try {
     $logDir = Join-Path $projectRoot "logs"
     if (Test-Path $logDir) {
         $logFiles = Get-ChildItem -Path $logDir -File -ErrorAction SilentlyContinue
+        $deletedCount = 0
+        $failedCount = 0
+        
         foreach ($file in $logFiles) {
             try {
-                # 尝试关闭可能占用的文件句柄
-                $file.Close()
-                Remove-Item $file.FullName -Force -ErrorAction SilentlyContinue
-                Write-Host "✅ 已删除日志文件: $($file.Name)" -ForegroundColor Green
+                Remove-Item $file.FullName -Force -ErrorAction Stop
+                $deletedCount++
             }
             catch {
-                Write-Host "❌ 无法删除日志文件 $($file.Name): $($_.Exception.Message)" -ForegroundColor Red
+                $failedCount++
+                # 只在详细模式下显示具体错误，避免刷屏
             }
+        }
+        
+        if ($deletedCount -gt 0) {
+            Write-Host "✅ 已删除 $deletedCount 个日志文件" -ForegroundColor Green
+        }
+        if ($failedCount -gt 0) {
+            Write-Host "⚠️ 有 $failedCount 个日志文件无法删除（可能被其他程序占用）" -ForegroundColor Yellow
+            Write-Host "💡 可以稍后使用 'ch-cleanup' 命令清理，或手动删除 logs 目录中的文件" -ForegroundColor Cyan
         }
     }
 }

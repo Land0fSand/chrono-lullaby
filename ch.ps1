@@ -21,6 +21,7 @@ function Show-Help {
     Write-Host "可用命令:" -ForegroundColor Cyan
     Write-Host "  start                    启动服务 (默认命令)" -ForegroundColor White
     Write-Host "  stop                     停止服务" -ForegroundColor White
+    Write-Host "  restart                  重启服务 (停止后重新启动)" -ForegroundColor White
     Write-Host "  status                   查看服务状态" -ForegroundColor White
     Write-Host "  logs     [类型] [选项]   查看日志" -ForegroundColor White
     Write-Host "  cleanup                  强制清理所有进程" -ForegroundColor White
@@ -45,6 +46,7 @@ function Show-Help {
     Write-Host "示例:" -ForegroundColor Yellow
     Write-Host "  ch start                 # 启动服务" -ForegroundColor Gray
     Write-Host "  ch stop                  # 停止服务" -ForegroundColor Gray
+    Write-Host "  ch restart               # 重启服务" -ForegroundColor Gray
     Write-Host "  ch status                # 查看状态" -ForegroundColor Gray
     Write-Host "  ch logs                  # 查看所有日志" -ForegroundColor Gray
     Write-Host "  ch logs downloader -f    # 实时查看下载器日志" -ForegroundColor Gray
@@ -123,9 +125,15 @@ function Add-ChToPath {
 $scriptPath = $MyInvocation.MyCommand.Path
 $projectRoot = Split-Path $scriptPath -Parent
 
-# 检查Poetry环境
-if (-not (Get-Command poetry -ErrorAction SilentlyContinue)) {
-    Write-Host "错误: 未找到 Poetry，请确保 Poetry 已安装并在 PATH 中" -ForegroundColor Red
+# 检查虚拟环境或 Poetry
+$venvPath = Join-Path $projectRoot ".venv\Scripts\python.exe"
+$useVenv = Test-Path $venvPath
+
+if (-not $useVenv -and -not (Get-Command poetry -ErrorAction SilentlyContinue)) {
+    Write-Host "错误: 未找到虚拟环境或 Poetry" -ForegroundColor Red
+    Write-Host "请运行以下命令之一来设置环境:" -ForegroundColor Yellow
+    Write-Host "  1. 使用 Poetry: poetry install" -ForegroundColor Gray
+    Write-Host "  2. 手动创建虚拟环境并安装依赖 (参见 README)" -ForegroundColor Gray
     exit 1
 }
 
@@ -207,34 +215,38 @@ function Invoke-StartCommand {
             New-Item -ItemType Directory -Path $logDir -Force | Out-Null
         }
 
-        # 设置日志文件路径（使用绝对路径）
-        $timestamp = Get-Date -Format "yyyy-MM-dd_HH-mm-ss"
-        $downloaderLog = Join-Path $logDir "downloader_$timestamp.log"
-        $botLog = Join-Path $logDir "bot_$timestamp.log"
-        $downloaderErrorLog = Join-Path $logDir "downloader_error_$timestamp.log"
-        $botErrorLog = Join-Path $logDir "bot_error_$timestamp.log"
-
         Write-Host "后台启动 YouTube 下载器..." -ForegroundColor Cyan
-        Write-Host "下载器日志: $downloaderLog" -ForegroundColor Gray
-        $downloaderProcess = Start-Process -FilePath "poetry" -ArgumentList "run", "python", "yt_dlp_downloader.py" -WindowStyle Hidden -PassThru -RedirectStandardOutput $downloaderLog -RedirectStandardError $downloaderErrorLog
+        Write-Host "日志目录: $logDir" -ForegroundColor Gray
+        Write-Host "日志文件由程序自动管理 (logs/downloader.log, logs/bot.log 等)" -ForegroundColor Gray
+        
+        if ($useVenv) {
+            $pythonExe = Join-Path $projectRoot ".venv\Scripts\python.exe"
+            $downloaderProcess = Start-Process -FilePath $pythonExe -ArgumentList "yt_dlp_downloader.py" -WindowStyle Hidden -PassThru
+        }
+        else {
+            $downloaderProcess = Start-Process -FilePath "poetry" -ArgumentList "run", "python", "yt_dlp_downloader.py" -WindowStyle Hidden -PassThru
+        }
 
         Start-Sleep 2
 
         Write-Host "后台启动 Telegram 机器人..." -ForegroundColor Cyan
-        Write-Host "机器人日志: $botLog" -ForegroundColor Gray
-        $botProcess = Start-Process -FilePath "poetry" -ArgumentList "run", "python", "telegram_bot.py" -WindowStyle Hidden -PassThru -RedirectStandardOutput $botLog -RedirectStandardError $botErrorLog
+        
+        if ($useVenv) {
+            $pythonExe = Join-Path $projectRoot ".venv\Scripts\python.exe"
+            $botProcess = Start-Process -FilePath $pythonExe -ArgumentList "telegram_bot.py" -WindowStyle Hidden -PassThru
+        }
+        else {
+            $botProcess = Start-Process -FilePath "poetry" -ArgumentList "run", "python", "telegram_bot.py" -WindowStyle Hidden -PassThru
+        }
 
         # 创建进程信息文件（使用绝对路径）
         $processInfoPath = Join-Path $projectRoot "process_info.json"
         $processInfo = @{
-            "downloader_pid"       = $downloaderProcess.Id
-            "bot_pid"              = $botProcess.Id
-            "start_time"           = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-            "project_root"         = $projectRoot
-            "downloader_log"       = $downloaderLog
-            "bot_log"              = $botLog
-            "downloader_error_log" = $downloaderErrorLog
-            "bot_error_log"        = $botErrorLog
+            "downloader_pid" = $downloaderProcess.Id
+            "bot_pid"        = $botProcess.Id
+            "start_time"     = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+            "project_root"   = $projectRoot
+            "log_dir"        = $logDir
         }
 
         $processInfo | ConvertTo-Json | Out-File -FilePath $processInfoPath -Encoding UTF8
@@ -258,31 +270,47 @@ function Invoke-StartCommand {
 
 # 停止命令实现
 function Invoke-StopCommand {
-    Write-Host "=== ChronoLullaby 服务停止 ===" -ForegroundColor Green
+    param (
+        [switch]$Silent = $false  # 静默模式，用于 restart 时不显示过多信息
+    )
+    
+    if (-not $Silent) {
+        Write-Host "=== ChronoLullaby 服务停止 ===" -ForegroundColor Green
+    }
 
     $stoppedCount = 0
     $processInfoPath = Join-Path $projectRoot "process_info.json"
 
     # 查找所有相关进程
-    Write-Host "🔍 查找所有相关进程..." -ForegroundColor Cyan
+    if (-not $Silent) {
+        Write-Host "🔍 查找所有相关进程..." -ForegroundColor Cyan
+    }
     $allProcesses = Get-AllRelatedProcesses
 
     if ($allProcesses.Count -gt 0) {
-        Write-Host "发现 $($allProcesses.Count) 个相关进程" -ForegroundColor Yellow
+        if (-not $Silent) {
+            Write-Host "发现 $($allProcesses.Count) 个相关进程" -ForegroundColor Yellow
+        }
 
         foreach ($process in $allProcesses) {
             try {
                 Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
-                Write-Host "✅ 已停止: $($process.ProcessName) (PID: $($process.Id))" -ForegroundColor Green
+                if (-not $Silent) {
+                    Write-Host "✅ 已停止: $($process.ProcessName) (PID: $($process.Id))" -ForegroundColor Green
+                }
                 $stoppedCount++
             }
             catch {
-                Write-Host "❌ 停止 $($process.ProcessName) (PID: $($process.Id)) 时出错: $($_.Exception.Message)" -ForegroundColor Red
+                if (-not $Silent) {
+                    Write-Host "❌ 停止 $($process.ProcessName) (PID: $($process.Id)) 时出错: $($_.Exception.Message)" -ForegroundColor Red
+                }
             }
         }
     }
     else {
-        Write-Host "ℹ️ 未找到相关进程" -ForegroundColor Gray
+        if (-not $Silent) {
+            Write-Host "ℹ️ 未找到相关进程" -ForegroundColor Gray
+        }
     }
 
     # 检查进程信息文件
@@ -290,7 +318,9 @@ function Invoke-StopCommand {
         try {
             $processInfo = Get-Content $processInfoPath | ConvertFrom-Json
 
-            Write-Host "从进程信息文件中读取 PID..." -ForegroundColor Cyan
+            if (-not $Silent) {
+                Write-Host "从进程信息文件中读取 PID..." -ForegroundColor Cyan
+            }
 
             # 停止下载器进程
             if ($processInfo.downloader_pid) {
@@ -298,14 +328,20 @@ function Invoke-StopCommand {
                     $process = Get-Process -Id $processInfo.downloader_pid -ErrorAction SilentlyContinue
                     if ($process) {
                         Stop-Process -Id $processInfo.downloader_pid -Force
-                        Write-Host "YouTube 下载器 (PID: $($processInfo.downloader_pid)) 已停止" -ForegroundColor Green
+                        if (-not $Silent) {
+                            Write-Host "YouTube 下载器 (PID: $($processInfo.downloader_pid)) 已停止" -ForegroundColor Green
+                        }
                     }
                     else {
-                        Write-Host "YouTube 下载器进程已不存在" -ForegroundColor Yellow
+                        if (-not $Silent) {
+                            Write-Host "YouTube 下载器进程已不存在" -ForegroundColor Yellow
+                        }
                     }
                 }
                 catch {
-                    Write-Host "停止 YouTube 下载器时出错: $($_.Exception.Message)" -ForegroundColor Red
+                    if (-not $Silent) {
+                        Write-Host "停止 YouTube 下载器时出错: $($_.Exception.Message)" -ForegroundColor Red
+                    }
                 }
             }
 
@@ -315,57 +351,79 @@ function Invoke-StopCommand {
                     $process = Get-Process -Id $processInfo.bot_pid -ErrorAction SilentlyContinue
                     if ($process) {
                         Stop-Process -Id $processInfo.bot_pid -Force
-                        Write-Host "Telegram 机器人 (PID: $($processInfo.bot_pid)) 已停止" -ForegroundColor Green
+                        if (-not $Silent) {
+                            Write-Host "Telegram 机器人 (PID: $($processInfo.bot_pid)) 已停止" -ForegroundColor Green
+                        }
                     }
                     else {
-                        Write-Host "Telegram 机器人进程已不存在" -ForegroundColor Yellow
+                        if (-not $Silent) {
+                            Write-Host "Telegram 机器人进程已不存在" -ForegroundColor Yellow
+                        }
                     }
                 }
                 catch {
-                    Write-Host "停止 Telegram 机器人时出错: $($_.Exception.Message)" -ForegroundColor Red
+                    if (-not $Silent) {
+                        Write-Host "停止 Telegram 机器人时出错: $($_.Exception.Message)" -ForegroundColor Red
+                    }
                 }
             }
 
             # 删除进程信息文件
             Remove-Item $processInfoPath -Force
-            Write-Host "已清理进程信息文件" -ForegroundColor Green
+            if (-not $Silent) {
+                Write-Host "已清理进程信息文件" -ForegroundColor Green
+            }
 
         }
         catch {
-            Write-Host "读取进程信息文件时出错: $($_.Exception.Message)" -ForegroundColor Red
-        }
-    }
-
-    # 清理日志文件
-    Write-Host "🧹 尝试清理日志文件..." -ForegroundColor Cyan
-    try {
-        $logDir = Join-Path $projectRoot "logs"
-        if (Test-Path $logDir) {
-            $logFiles = Get-ChildItem -Path $logDir -File -ErrorAction SilentlyContinue
-            foreach ($file in $logFiles) {
-                try {
-                    $file.Close()
-                    Remove-Item $file.FullName -Force -ErrorAction SilentlyContinue
-                    Write-Host "✅ 已删除日志文件: $($file.Name)" -ForegroundColor Green
-                }
-                catch {
-                    Write-Host "❌ 无法删除日志文件 $($file.Name): $($_.Exception.Message)" -ForegroundColor Red
-                }
+            if (-not $Silent) {
+                Write-Host "读取进程信息文件时出错: $($_.Exception.Message)" -ForegroundColor Red
             }
         }
     }
-    catch {
-        Write-Host "⚠️ 日志文件清理过程中出错: $($_.Exception.Message)" -ForegroundColor Yellow
-    }
 
-    Write-Host "🎯 停止操作完成 - 共停止了 $stoppedCount 个进程" -ForegroundColor Green
+    # 注意：现在日志由程序自动管理，通常不需要手动清理
+    # 如果确实需要清理，请使用 'ch-cleanup' 命令
+
+    if (-not $Silent) {
+        Write-Host "🎯 停止操作完成 - 共停止了 $stoppedCount 个进程" -ForegroundColor Green
+        if ($stoppedCount -gt 0) {
+            Write-Host "✅ 所有相关进程已停止" -ForegroundColor Green
+        }
+        else {
+            Write-Host "⚠️ 未找到相关进程，可能需要使用 'ch cleanup' 强制清理" -ForegroundColor Yellow
+        }
+    }
+    
+    return $stoppedCount
+}
+
+# 重启命令实现
+function Invoke-RestartCommand {
+    Write-Host "=== ChronoLullaby 服务重启 ===" -ForegroundColor Green
+    Write-Host ""
+    
+    Write-Host "📍 第 1 步: 停止现有服务..." -ForegroundColor Cyan
+    $stoppedCount = Invoke-StopCommand -Silent
+    
     if ($stoppedCount -gt 0) {
-        Write-Host "✅ 所有相关进程已停止" -ForegroundColor Green
-        Write-Host "💡 现在可以安全删除日志文件了" -ForegroundColor Cyan
+        Write-Host "✅ 已停止 $stoppedCount 个进程" -ForegroundColor Green
     }
     else {
-        Write-Host "⚠️ 未找到相关进程，可能需要使用 'ch cleanup' 强制清理" -ForegroundColor Yellow
+        Write-Host "ℹ️ 没有发现运行中的进程" -ForegroundColor Gray
     }
+    
+    Write-Host ""
+    Write-Host "⏳ 等待进程完全退出..." -ForegroundColor Yellow
+    Start-Sleep -Seconds 3
+    
+    Write-Host ""
+    Write-Host "📍 第 2 步: 启动服务..." -ForegroundColor Cyan
+    Invoke-StartCommand
+    
+    Write-Host ""
+    Write-Host "=== 重启完成 ===" -ForegroundColor Green
+    Write-Host "使用 'ch status' 检查服务状态" -ForegroundColor Yellow
 }
 
 # 状态命令实现
@@ -413,14 +471,8 @@ function Invoke-StatusCommand {
             Write-Host "从进程信息文件读取状态:" -ForegroundColor Cyan
             Write-Host "项目目录: $($processInfo.project_root)" -ForegroundColor Gray
             Write-Host "启动时间: $($processInfo.start_time)" -ForegroundColor White
-
-            # 显示日志信息
-            if ($processInfo.downloader_log) {
-                Write-Host "下载器日志: $($processInfo.downloader_log)" -ForegroundColor Gray
-            }
-            if ($processInfo.bot_log) {
-                Write-Host "机器人日志: $($processInfo.bot_log)" -ForegroundColor Gray
-            }
+            Write-Host "日志目录: $($processInfo.log_dir)" -ForegroundColor Gray
+            Write-Host "使用 'ch logs' 查看日志" -ForegroundColor Gray
             Write-Host ""
 
             $downloaderRunning = Check-ProcessStatus -ProcessId $processInfo.downloader_pid -ProcessName "YouTube 下载器"
@@ -691,24 +743,38 @@ function Invoke-CleanupCommand {
     }
 
     # 尝试清理日志文件
+    Write-Host "📁 等待文件释放..." -ForegroundColor Cyan
+    Start-Sleep -Seconds 3
+    
     Write-Host "📁 尝试清理日志文件..." -ForegroundColor Cyan
     try {
         $possiblePaths = @(".", (Split-Path $MyInvocation.MyCommand.Path -Parent))
+        $totalDeleted = 0
+        $totalFailed = 0
+        
         foreach ($path in $possiblePaths) {
             $logDir = Join-Path $path "logs"
             if (Test-Path $logDir) {
                 $logFiles = Get-ChildItem -Path $logDir -File -ErrorAction SilentlyContinue
                 foreach ($file in $logFiles) {
                     try {
-                        $file.Close()
-                        Remove-Item $file.FullName -Force -Recurse -ErrorAction SilentlyContinue
-                        Write-Host "✅ 已删除日志: $($file.Name)" -ForegroundColor Green
+                        Remove-Item $file.FullName -Force -ErrorAction Stop
+                        $totalDeleted++
                     }
                     catch {
-                        Write-Host "❌ 无法删除 $($file.Name): $($_.Exception.Message)" -ForegroundColor Red
+                        $totalFailed++
+                        # 静默失败，避免刷屏
                     }
                 }
             }
+        }
+        
+        if ($totalDeleted -gt 0) {
+            Write-Host "✅ 已删除 $totalDeleted 个日志文件" -ForegroundColor Green
+        }
+        if ($totalFailed -gt 0) {
+            Write-Host "⚠️ 有 $totalFailed 个日志文件无法删除" -ForegroundColor Yellow
+            Write-Host "💡 建议手动删除 logs 目录，或稍后重试" -ForegroundColor Cyan
         }
     }
     catch {
@@ -782,35 +848,41 @@ function Get-AllRelatedProcesses {
 }
 
 function Get-LatestLogFiles {
-    $processInfoPath = Join-Path $projectRoot "process_info.json"
-
-    if (Test-Path $processInfoPath) {
-        try {
-            $processInfo = Get-Content $processInfoPath | ConvertFrom-Json
-            return @{
-                "downloader_log"       = $processInfo.downloader_log
-                "bot_log"              = $processInfo.bot_log
-                "downloader_error_log" = $processInfo.downloader_error_log
-                "bot_error_log"        = $processInfo.bot_error_log
-            }
-        }
-        catch {
-            Write-Host "⚠️ 无法读取进程信息文件，将查找最新的日志文件" -ForegroundColor Yellow
-        }
+    # 查找最新的日志文件（由 logger.py 自动创建）
+    $logDir = Join-Path $projectRoot "logs"
+    
+    # 优先查找固定名称的日志文件（logger.py 的默认输出）
+    $downloaderLog = Join-Path $logDir "downloader.log"
+    $botLog = Join-Path $logDir "bot.log"
+    $downloaderErrorLog = Join-Path $logDir "downloader_error.log"
+    $botErrorLog = Join-Path $logDir "bot_error.log"
+    
+    # 如果固定名称的日志不存在，查找带时间戳的日志（兼容旧版）
+    if (-not (Test-Path $downloaderLog)) {
+        $latestDownloader = Get-ChildItem -Path $logDir -Name "downloader_*.log" -ErrorAction SilentlyContinue | Where-Object { $_ -notlike "*error*" } | Sort-Object -Descending | Select-Object -First 1
+        $downloaderLog = if ($latestDownloader) { Join-Path $logDir $latestDownloader } else { $null }
+    }
+    
+    if (-not (Test-Path $botLog)) {
+        $latestBot = Get-ChildItem -Path $logDir -Name "bot_*.log" -ErrorAction SilentlyContinue | Where-Object { $_ -notlike "*error*" } | Sort-Object -Descending | Select-Object -First 1
+        $botLog = if ($latestBot) { Join-Path $logDir $latestBot } else { $null }
+    }
+    
+    if (-not (Test-Path $downloaderErrorLog)) {
+        $latestDownloaderError = Get-ChildItem -Path $logDir -Name "downloader_error_*.log" -ErrorAction SilentlyContinue | Sort-Object -Descending | Select-Object -First 1
+        $downloaderErrorLog = if ($latestDownloaderError) { Join-Path $logDir $latestDownloaderError } else { $null }
+    }
+    
+    if (-not (Test-Path $botErrorLog)) {
+        $latestBotError = Get-ChildItem -Path $logDir -Name "bot_error_*.log" -ErrorAction SilentlyContinue | Sort-Object -Descending | Select-Object -First 1
+        $botErrorLog = if ($latestBotError) { Join-Path $logDir $latestBotError } else { $null }
     }
 
-    # 如果没有进程信息文件，查找最新的日志文件
-    $logDir = Join-Path $projectRoot "logs"
-    $latestDownloader = Get-ChildItem -Path $logDir -Name "downloader_*.log" | Where-Object { $_ -notlike "*error*" } | Sort-Object -Descending | Select-Object -First 1
-    $latestBot = Get-ChildItem -Path $logDir -Name "bot_*.log" | Where-Object { $_ -notlike "*error*" } | Sort-Object -Descending | Select-Object -First 1
-    $latestDownloaderError = Get-ChildItem -Path $logDir -Name "downloader_error_*.log" | Sort-Object -Descending | Select-Object -First 1
-    $latestBotError = Get-ChildItem -Path $logDir -Name "bot_error_*.log" | Sort-Object -Descending | Select-Object -First 1
-
     return @{
-        "downloader_log"       = if ($latestDownloader) { Join-Path $logDir $latestDownloader } else { $null }
-        "bot_log"              = if ($latestBot) { Join-Path $logDir $latestBot } else { $null }
-        "downloader_error_log" = if ($latestDownloaderError) { Join-Path $logDir $latestDownloaderError } else { $null }
-        "bot_error_log"        = if ($latestBotError) { Join-Path $logDir $latestBotError } else { $null }
+        "downloader_log"       = $downloaderLog
+        "bot_log"              = $botLog
+        "downloader_error_log" = $downloaderErrorLog
+        "bot_error_log"        = $botErrorLog
     }
 }
 
@@ -848,6 +920,9 @@ switch ($Command.ToLower()) {
     }
     "stop" {
         Invoke-StopCommand
+    }
+    "restart" {
+        Invoke-RestartCommand
     }
     "status" {
         Invoke-StatusCommand
@@ -945,3 +1020,4 @@ function Add-ChToPath {
         Write-Host "  $scriptDir" -ForegroundColor Cyan
     }
 }
+

@@ -14,6 +14,7 @@ if sys.stdout.encoding != 'utf-8':
     sys.stdout.reconfigure(encoding='utf-8')
 if sys.stderr.encoding != 'utf-8':
     sys.stderr.reconfigure(encoding='utf-8')
+
 from config import (
     AUDIO_FOLDER,
     TEMP_AUDIO_FOLDER,
@@ -22,33 +23,37 @@ from config import (
     STORY_FILE,
     COOKIES_FILE,
 )
+from logger import get_logger, log_with_context
+
+# 使用统一的日志系统
+logger = get_logger('downloader.dl_audio')
 
 
 class TimestampedYTDLLogger:
-    """自定义yt-dlp日志处理器，添加时间戳"""
+    """自定义yt-dlp日志处理器，桥接到统一日志系统"""
 
     def __init__(self):
-        self._logger = logging.getLogger("yt-dlp")
+        self._logger = get_logger('downloader.yt-dlp')
 
     def debug(self, msg):
-        self._logger.debug(msg)
+        if msg.strip():
+            self._logger.debug(msg)
 
     def info(self, msg):
-        # 只处理yt-dlp的日志消息，跳过我们的print语句
         if msg.strip():
-            print(f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {msg}")
+            self._logger.info(msg)
 
     def warning(self, msg):
         if msg.strip():
-            print(f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] WARNING: {msg}")
+            self._logger.warning(msg)
 
     def error(self, msg):
         if msg.strip():
-            print(f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] ERROR: {msg}")
+            self._logger.error(msg)
 
     def critical(self, msg):
         if msg.strip():
-            print(f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] CRITICAL: {msg}")
+            self._logger.critical(msg)
 
 yt_base_url = "https://www.youtube.com/"
 
@@ -63,20 +68,32 @@ def safe_move_file(src, dst, max_retries=5):
             return True
         except (OSError, PermissionError) as e:
             if attempt < max_retries - 1:
-                print(f"    文件移动失败，重试 {attempt + 1}/{max_retries}: {e}")
+                log_with_context(
+                    logger, logging.WARNING,
+                    "文件移动失败，准备重试",
+                    src=src, dst=dst, attempt=attempt + 1, max_retries=max_retries, error=str(e)
+                )
                 time.sleep(0.5 * (attempt + 1))  # 递增延迟
                 continue
             else:
-                print(f"    文件移动失败，已重试 {max_retries} 次: {e}")
+                log_with_context(
+                    logger, logging.ERROR,
+                    "文件移动失败，已达最大重试次数",
+                    src=src, dst=dst, max_retries=max_retries, error=str(e)
+                )
                 # 尝试强制删除源文件
                 try:
                     os.remove(src)
-                    print(f"    已删除无法移动的源文件: {src}")
+                    logger.warning(f"已删除无法移动的源文件: {src}")
                 except OSError:
-                    print(f"    无法删除源文件: {src}")
+                    logger.error(f"无法删除源文件: {src}")
                 return False
         except Exception as e:
-            print(f"    文件移动意外错误: {e}")
+            log_with_context(
+                logger, logging.ERROR,
+                "文件移动意外错误",
+                src=src, dst=dst, error=str(e), error_type=type(e).__name__
+            )
             return False
 
 
@@ -84,7 +101,8 @@ def member_content_filter(info_dict):
     """过滤会员专属内容"""
     try:
         video_id = info_dict.get("id", "")
-        print(f"    过滤器检查视频: {video_id} - {info_dict.get('title', '未知标题')[:50]}...")
+        video_title = info_dict.get('title', '未知标题')[:50]
+        logger.debug(f"过滤器检查视频: {video_id} - {video_title}...")
 
         # 已知的会员视频ID列表
         known_member_videos = [
@@ -93,7 +111,11 @@ def member_content_filter(info_dict):
         ]
 
         if video_id in known_member_videos:
-            print(f"    跳过已知会员视频: {info_dict.get('title', '未知标题')} (ID: {video_id})")
+            log_with_context(
+                logger, logging.INFO,
+                "跳过已知会员视频",
+                video_id=video_id, title=video_title
+            )
             return "已知会员视频"
 
         # 检查视频描述中是否包含会员内容关键词
@@ -111,22 +133,34 @@ def member_content_filter(info_dict):
 
         # 检查是否包含会员关键词
         if any(keyword in description or keyword in title for keyword in member_keywords):
-            print(f"    跳过会员内容: {info_dict.get('title', '未知标题')}")
+            log_with_context(
+                logger, logging.INFO,
+                "跳过会员内容",
+                video_id=video_id, title=video_title
+            )
             return "会员专属内容"
 
         # 检查是否有会员相关字段
         if info_dict.get("availability") == "subscriber_only":
-            print(f"    跳过会员专属视频: {info_dict.get('title', '未知标题')}")
+            log_with_context(
+                logger, logging.INFO,
+                "跳过会员专属视频",
+                video_id=video_id, title=video_title
+            )
             return "会员专属内容"
 
         # 检查是否为私人视频（会员视频通常标记为私人）
         if info_dict.get("availability") == "private":
-            print(f"    跳过私人视频: {info_dict.get('title', '未知标题')}")
+            log_with_context(
+                logger, logging.INFO,
+                "跳过私人视频",
+                video_id=video_id, title=video_title
+            )
             return "私人视频"
 
         return None
     except Exception as e:
-        print(f"    会员过滤器错误: {e}")
+        logger.warning(f"会员过滤器错误: {e}")
         return None
 
 
@@ -136,18 +170,18 @@ def combined_filter(info_dict):
         # 先检查会员内容过滤
         member_result = member_content_filter(info_dict)
         if member_result:
-            print(f"    过滤器跳过: {info_dict.get('title', '未知标题')} - {member_result}")
+            logger.debug(f"过滤器跳过: {info_dict.get('title', '未知标题')} - {member_result}")
             return member_result
 
         # 再检查时间过滤
         time_result = oneday_filter(info_dict)
         if time_result:
-            print(f"    过滤器跳过: {info_dict.get('title', '未知标题')} - {time_result}")
+            logger.debug(f"过滤器跳过: {info_dict.get('title', '未知标题')} - {time_result}")
             return time_result
 
         return None
     except Exception as e:
-        print(f"    组合过滤器错误: {e}")
+        logger.warning(f"组合过滤器错误: {e}")
         return None
 
 
@@ -164,14 +198,18 @@ def oneday_filter(info_dict):
             )
             
             if upload_datetime > three_days_ago:
-                print(f"\n发现最近视频: {info_dict.get('title', '未知标题')}")
-                print(f"上传时间: {upload_datetime.strftime('%Y-%m-%d %H:%M:%S')}")
+                log_with_context(
+                    logger, logging.INFO,
+                    "发现最近视频",
+                    title=info_dict.get('title', '未知标题'),
+                    upload_time=upload_datetime.strftime('%Y-%m-%d %H:%M:%S')
+                )
                 return None
             return "视频超过3天"
             
         upload_date = info_dict.get("upload_date")
         if not upload_date:
-            print(f"\n无法获取视频时间: {info_dict.get('title', '未知标题')}")
+            logger.debug(f"无法获取视频时间: {info_dict.get('title', '未知标题')}")
             return None
             
         naive_upload_datetime = datetime.datetime.strptime(upload_date, "%Y%m%d")
@@ -181,26 +219,30 @@ def oneday_filter(info_dict):
         )
         
         if upload_datetime > three_days_ago:
-            print(f"\n发现最近视频: {info_dict.get('title', '未知标题')}")
-            print(f"上传时间: {upload_datetime.strftime('%Y-%m-%d')}")
+            log_with_context(
+                logger, logging.INFO,
+                "发现最近视频",
+                title=info_dict.get('title', '未知标题'),
+                upload_time=upload_datetime.strftime('%Y-%m-%d')
+            )
             return None
         return "视频超过3天"
     except Exception as e:
-        print(f"过滤器错误: {str(e)}")
+        logger.warning(f"过滤器错误: {str(e)}")
         return None
 
 
 def check_cookies():
     """检查cookies文件是否存在且有效"""
     if not os.path.exists(COOKIES_FILE):
-        print("\n未找到cookies文件！")
-        print("请按以下步骤操作：")
-        print("1. 安装Chrome扩展：'Cookie-Editor'")
-        print("2. 访问 YouTube 并确保已登录")
-        print("3. 点击Cookie-Editor扩展图标")
-        print("4. 点击'Export'按钮，选择'Netscape HTTP Cookie File'格式")
-        print("5. 将导出的内容保存到项目根目录下的 'youtube.cookies' 文件中")
-        print("6. 完成后重新运行程序")
+        logger.error("未找到cookies文件！")
+        logger.info("请按以下步骤操作：")
+        logger.info("1. 安装Chrome扩展：'Cookie-Editor'")
+        logger.info("2. 访问 YouTube 并确保已登录")
+        logger.info("3. 点击Cookie-Editor扩展图标")
+        logger.info("4. 点击'Export'按钮，选择'Netscape HTTP Cookie File'格式")
+        logger.info("5. 将导出的内容保存到项目根目录下的 'youtube.cookies' 文件中")
+        logger.info("6. 完成后重新运行程序")
         return False
     return True
 
@@ -208,7 +250,7 @@ def check_cookies():
 def get_ydl_opts(custom_opts=None):
     if not os.path.exists(TEMP_AUDIO_FOLDER):
         os.makedirs(TEMP_AUDIO_FOLDER)
-        print(f"已创建临时下载目录: {TEMP_AUDIO_FOLDER}")
+        logger.info(f"已创建临时下载目录: {TEMP_AUDIO_FOLDER}")
 
     base_opts = {
         "format": "bestaudio/best",
@@ -256,15 +298,16 @@ def progress_hook(d):
                 speed = d.get('speed', 0)
                 if speed:
                     speed_mb = speed / 1024 / 1024
-                    print(f"\r下载进度: {percent:.1f}% - {speed_mb:.1f}MB/s", end='', flush=True)
+                    # 进度信息使用 DEBUG 级别，避免日志过多
+                    logger.debug(f"下载进度: {percent:.1f}% - {speed_mb:.1f}MB/s")
                 else:
-                    print(f"\r下载进度: {percent:.1f}%", end='', flush=True)
+                    logger.debug(f"下载进度: {percent:.1f}%")
         except Exception:
             pass
     elif d['status'] == 'finished':
-        print(f"\n下载完成 (原始文件): {d.get('filename', '')}")
+        logger.info(f"下载完成 (原始文件): {d.get('filename', '')}")
     elif d['status'] == 'already_downloaded':
-        print(f"已存在: {d.get('title', '')}")
+        logger.info(f"已存在: {d.get('title', '')}")
 
 
 def get_available_format(url):
@@ -294,7 +337,7 @@ def dl_audio_latest(channel_name):
     
     if not os.path.exists(AUDIO_FOLDER):
         os.makedirs(AUDIO_FOLDER)
-        print(f"已创建最终音频目录: {AUDIO_FOLDER}")
+        logger.info(f"已创建最终音频目录: {AUDIO_FOLDER}")
 
     custom_opts = {
         "download_archive": DOWNLOAD_ARCHIVE,
@@ -305,13 +348,33 @@ def dl_audio_latest(channel_name):
     
     ydl_opts = get_ydl_opts(custom_opts)
     
+    # 统计信息
+    stats = {
+        'total': 0,
+        'success': 0,
+        'already_exists': 0,
+        'filtered': 0,
+        'archived': 0,
+        'member_only': 0,
+        'error': 0,
+        'details': []
+    }
+    
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         try:
-            print(f"开始获取频道 {channel_name} 的视频列表...")
+            log_with_context(
+                logger, logging.INFO,
+                "开始获取频道视频列表",
+                channel=channel_name
+            )
             url = f"{yt_base_url}{channel_name}"
             channel_info = ydl.extract_info(url, download=False)
             if not channel_info or 'entries' not in channel_info:
-                print(f"频道 {channel_name} 未找到视频或信息不完整。")
+                log_with_context(
+                    logger, logging.WARNING,
+                    "频道未找到视频或信息不完整",
+                    channel=channel_name
+                )
                 return False
 
             entries_to_download = []
@@ -324,14 +387,43 @@ def dl_audio_latest(channel_name):
                         entries_to_download.append(video_playlist_entry)
             else:
                 entries_to_download = channel_info.get('entries', [])
+            
+            # 记录找到的视频总数
+            stats['total'] = len(entries_to_download)
+            log_with_context(
+                logger, logging.INFO,
+                "频道视频列表获取完成",
+                channel=channel_name,
+                total_videos=stats['total'],
+                max_to_process=6
+            )
 
-            for video_info in entries_to_download:
+            for idx, video_info in enumerate(entries_to_download, 1):
                 video_url = video_info.get("webpage_url")
+                video_title = video_info.get('title', '未知标题')
+                video_id = video_info.get('id', 'unknown')
+                
                 if not video_url:
-                    print(f"  跳过条目，无URL: {video_info.get('title', '未知标题')}")
+                    logger.debug(f"跳过条目，无URL: {video_title}")
+                    stats['error'] += 1
+                    stats['details'].append({
+                        'index': idx,
+                        'title': video_title,
+                        'id': video_id,
+                        'status': 'no_url',
+                        'reason': '无视频URL'
+                    })
                     continue
 
-                print(f"  准备处理视频: {video_info.get('title', '未知标题')} ({video_url})")
+                log_with_context(
+                    logger, logging.INFO,
+                    "开始处理视频",
+                    channel=channel_name,
+                    video_index=f"{idx}/{stats['total']}",
+                    title=video_title,
+                    video_id=video_id,
+                    url=video_url
+                )
                 
                 uploader = video_info.get('uploader', 'UnknownUploader')
                 fulltitle = video_info.get('fulltitle', video_info.get('title', 'UnknownTitle'))
@@ -347,7 +439,23 @@ def dl_audio_latest(channel_name):
                 final_destination_audio_path = os.path.join(AUDIO_FOLDER, f"{final_audio_filename_stem}{expected_audio_ext}")
 
                 if os.path.exists(final_destination_audio_path):
-                    print(f"  最终音频文件已存在于目标目录: {final_destination_audio_path}，跳过。")
+                    log_with_context(
+                        logger, logging.INFO,
+                        "音频文件已存在，跳过下载",
+                        channel=channel_name,
+                        video_index=f"{idx}/{stats['total']}",
+                        title=video_title,
+                        video_id=video_id,
+                        file=os.path.basename(final_destination_audio_path)
+                    )
+                    stats['already_exists'] += 1
+                    stats['details'].append({
+                        'index': idx,
+                        'title': video_title,
+                        'id': video_id,
+                        'status': 'already_exists',
+                        'reason': '文件已存在'
+                    })
                     continue
                 
                 current_video_ydl_opts = ydl_opts.copy()
@@ -356,66 +464,243 @@ def dl_audio_latest(channel_name):
                     'aac': temp_audio_path_without_ext + expected_audio_ext
                 }
 
-                print(f"    将下载到临时文件名模板: {temp_audio_path_without_ext}.%(ext)s")
-                print(f"    预期转换后临时音频: {expected_temp_audio_path}")
-                print(f"    最终将移动到: {final_destination_audio_path}")
+                log_with_context(
+                    logger, logging.DEBUG,
+                    "下载路径配置",
+                    temp_template=f"{temp_audio_path_without_ext}.%(ext)s",
+                    expected_temp=expected_temp_audio_path,
+                    final_destination=final_destination_audio_path
+                )
+
+                # 先检查过滤器（避免被过滤的视频被误报为下载失败）
+                filter_result = combined_filter(video_info)
+                if filter_result:
+                    logger.debug(f"视频被过滤器跳过: {filter_result}")
+                    stats['filtered'] += 1
+                    stats['details'].append({
+                        'index': idx,
+                        'title': video_title,
+                        'id': video_id,
+                        'status': 'filtered',
+                        'reason': filter_result
+                    })
+                    continue
 
                 try:
                     with yt_dlp.YoutubeDL(current_video_ydl_opts) as video_ydl:
                         video_ydl.download([video_url]) 
                     
                     if os.path.exists(expected_temp_audio_path):
-                        print(f"    转换后音频已在临时目录: {expected_temp_audio_path}")
-                        print(f"    准备移动到: {final_destination_audio_path}")
+                        logger.info(f"转换后音频已在临时目录: {expected_temp_audio_path}")
                         if safe_move_file(expected_temp_audio_path, final_destination_audio_path):
-                            print(f"    成功移动到: {final_destination_audio_path}")
+                            file_size_mb = os.path.getsize(final_destination_audio_path) / (1024 * 1024)
+                            log_with_context(
+                                logger, logging.INFO,
+                                "✅ 视频下载成功",
+                                channel=channel_name,
+                                video_index=f"{idx}/{stats['total']}",
+                                title=video_title,
+                                video_id=video_id,
+                                file=os.path.basename(final_destination_audio_path),
+                                size_mb=round(file_size_mb, 2)
+                            )
+                            stats['success'] += 1
+                            stats['details'].append({
+                                'index': idx,
+                                'title': video_title,
+                                'id': video_id,
+                                'status': 'success',
+                                'reason': '下载成功',
+                                'size_mb': round(file_size_mb, 2)
+                            })
                         else:
-                            print(f"    移动失败，跳过此文件")
+                            log_with_context(
+                                logger, logging.ERROR,
+                                "❌ 视频下载失败 - 文件移动失败",
+                                channel=channel_name,
+                                video_index=f"{idx}/{stats['total']}",
+                                title=video_title,
+                                video_id=video_id
+                            )
+                            stats['error'] += 1
+                            stats['details'].append({
+                                'index': idx,
+                                'title': video_title,
+                                'id': video_id,
+                                'status': 'error',
+                                'reason': '文件移动失败'
+                            })
                     else:
-                        print(f"错误: 转换后的音频文件 {expected_temp_audio_path} 在临时目录中未找到！")
+                        log_with_context(
+                            logger, logging.ERROR,
+                            "❌ 视频下载失败 - 转换后文件未找到",
+                            channel=channel_name,
+                            video_index=f"{idx}/{stats['total']}",
+                            title=video_title,
+                            video_id=video_id,
+                            expected_file=expected_temp_audio_path
+                        )
                         original_downloaded_file_actual_ext = None
                         for ext_try in ['.webm', '.mp4', '.mkv', '.flv', '.avi', '.mov', '.opus', '.ogg', '.mp3']:
                             potential_orig_file = temp_audio_path_without_ext + ext_try
                             if os.path.exists(potential_orig_file):
                                 original_downloaded_file_actual_ext = ext_try
-                                print(f"      找到原始下载文件: {potential_orig_file}，但未转换为 {expected_audio_ext}")
+                                logger.warning(f"找到原始下载文件: {potential_orig_file}，但未转换为 {expected_audio_ext}")
                                 break
                         if not original_downloaded_file_actual_ext:
-                             print(f"      原始下载文件也未找到 (尝试的模板: {temp_audio_path_without_ext}.*)")
+                             logger.error(f"原始下载文件也未找到 (尝试的模板: {temp_audio_path_without_ext}.*)")
+                        
+                        stats['error'] += 1
+                        stats['details'].append({
+                            'index': idx,
+                            'title': video_title,
+                            'id': video_id,
+                            'status': 'error',
+                            'reason': '转换失败或文件未找到'
+                        })
 
                 except yt_dlp.utils.DownloadError as de:
                     error_str = str(de)
                     if "already been recorded in the archive" in error_str:
-                        print(f"  视频已在存档中记录，跳过: {video_info.get('title', '未知标题')}")
+                        log_with_context(
+                            logger, logging.INFO,
+                            "视频已在存档中记录，跳过",
+                            channel=channel_name,
+                            video_index=f"{idx}/{stats['total']}",
+                            title=video_title,
+                            video_id=video_id
+                        )
+                        stats['archived'] += 1
+                        stats['details'].append({
+                            'index': idx,
+                            'title': video_title,
+                            'id': video_id,
+                            'status': 'archived',
+                            'reason': '已在存档中'
+                        })
                     elif "members-only" in error_str or "member" in error_str or "premium" in error_str or "subscriber" in error_str:
-                        print(f"  跳过会员专属视频: {video_info.get('title', '未知标题')}")
+                        log_with_context(
+                            logger, logging.INFO,
+                            "跳过会员专属视频",
+                            channel=channel_name,
+                            video_index=f"{idx}/{stats['total']}",
+                            title=video_title,
+                            video_id=video_id
+                        )
+                        stats['member_only'] += 1
+                        stats['details'].append({
+                            'index': idx,
+                            'title': video_title,
+                            'id': video_id,
+                            'status': 'member_only',
+                            'reason': '会员专属内容'
+                        })
                     else:
-                        print(f"  下载视频 {video_info.get('title', '未知标题')} 时发生 yt-dlp DownloadError: {str(de)}")
+                        log_with_context(
+                            logger, logging.ERROR,
+                            "❌ 视频下载失败 - yt-dlp错误",
+                            channel=channel_name,
+                            video_index=f"{idx}/{stats['total']}",
+                            title=video_title,
+                            video_id=video_id,
+                            error=str(de)
+                        )
+                        stats['error'] += 1
+                        stats['details'].append({
+                            'index': idx,
+                            'title': video_title,
+                            'id': video_id,
+                            'status': 'error',
+                            'reason': f'yt-dlp错误: {str(de)[:100]}'
+                        })
                     if os.path.exists(expected_temp_audio_path):
-                        try: os.remove(expected_temp_audio_path); print(f"    已清理部分下载的音频文件: {expected_temp_audio_path}")
+                        try: 
+                            os.remove(expected_temp_audio_path)
+                            logger.debug(f"已清理部分下载的音频文件: {expected_temp_audio_path}")
                         except OSError: pass
                     for ext_try in ['.webm', '.mp4', '.mkv']:
                         potential_orig_file = temp_audio_path_without_ext + ext_try
                         if os.path.exists(potential_orig_file):
-                            try: os.remove(potential_orig_file); print(f"    已清理部分下载的视频文件: {potential_orig_file}")
+                            try:
+                                os.remove(potential_orig_file)
+                                logger.debug(f"已清理部分下载的视频文件: {potential_orig_file}")
                             except OSError: pass
                             break
                     continue
                 except Exception as e:
-                    print(f"  下载视频 {video_info.get('title', '未知标题')} 时发生一般错误: {type(e).__name__} - {str(e)}")
+                    log_with_context(
+                        logger, logging.ERROR,
+                        "❌ 视频下载失败 - 未知错误",
+                        channel=channel_name,
+                        video_index=f"{idx}/{stats['total']}",
+                        title=video_title,
+                        video_id=video_id,
+                        error=str(e),
+                        error_type=type(e).__name__
+                    )
+                    stats['error'] += 1
+                    stats['details'].append({
+                        'index': idx,
+                        'title': video_title,
+                        'id': video_id,
+                        'status': 'error',
+                        'reason': f'{type(e).__name__}: {str(e)[:100]}'
+                    })
                     continue
+            
+            # 输出频道处理汇总
+            log_with_context(
+                logger, logging.INFO,
+                "=" * 60 + "\n频道处理完成 - 汇总统计",
+                channel=channel_name,
+                total_videos=stats['total'],
+                success=stats['success'],
+                already_exists=stats['already_exists'],
+                filtered=stats['filtered'],
+                archived=stats['archived'],
+                member_only=stats['member_only'],
+                error=stats['error'],
+                success_rate=f"{round(stats['success'] / max(stats['total'], 1) * 100, 1)}%"
+            )
+            
+            # 输出详细列表
+            if stats['details']:
+                logger.info(f"\n{'='*60}")
+                logger.info(f"详细列表 - {channel_name}")
+                logger.info(f"{'='*60}")
+                for detail in stats['details']:
+                    status_icon = {
+                        'success': '✅',
+                        'already_exists': '📦',
+                        'filtered': '🚫',
+                        'archived': '📚',
+                        'member_only': '🔒',
+                        'error': '❌',
+                        'no_url': '⚠️'
+                    }.get(detail['status'], '❓')
+                    
+                    logger.info(
+                        f"{status_icon} [{detail['index']:2d}] {detail['status']:15s} | "
+                        f"{detail['title'][:50]:50s} | {detail['reason']}"
+                    )
         
         except Exception as e:
-            print(f"处理频道 {channel_name} 时发生错误: {type(e).__name__} - {str(e)}")
+            log_with_context(
+                logger, logging.ERROR,
+                "处理频道时发生错误",
+                channel=channel_name,
+                error=str(e),
+                error_type=type(e).__name__
+            )
             if "HTTP Error 404" in str(e):
-                print(f"频道 {channel_name} 不存在或无法访问，请检查频道名称是否正确。")
+                logger.error(f"频道 {channel_name} 不存在或无法访问，请检查频道名称是否正确。")
             elif any(msg in str(e).lower() for msg in ["sign in to confirm", "unable to download api page", "not a bot", "consent"]):
-                print("\nCookies可能已过期或需要同意YouTube政策！")
-                print("请按以下步骤更新cookies：")
-                print("1. (浏览器) 清除youtube.com的cookies，访问YouTube并确保已登录及处理任何弹窗。")
-                print("2. (浏览器) 使用Cookie-Editor导出新的cookies。")
-                print("3. 将新的cookies内容覆盖保存到 'youtube.cookies' 文件。")
-                print("4. 完成后按 Enter 键继续程序或重启程序。")
+                logger.error("Cookies可能已过期或需要同意YouTube政策！")
+                logger.info("请按以下步骤更新cookies：")
+                logger.info("1. (浏览器) 清除youtube.com的cookies，访问YouTube并确保已登录及处理任何弹窗。")
+                logger.info("2. (浏览器) 使用Cookie-Editor导出新的cookies。")
+                logger.info("3. 将新的cookies内容覆盖保存到 'youtube.cookies' 文件。")
+                logger.info("4. 完成后按 Enter 键继续程序或重启程序。")
                 return False
     return True
 
@@ -456,25 +741,29 @@ def update_channel_info_file(channel_name, target_timestamp, info_file_path):
 
 
 def dl_audio_closest_after(au_folder, channel_name, target_timestamp=None):
-    print(f"\n开始处理频道历史视频: {channel_name}")
+    log_with_context(
+        logger, logging.INFO,
+        "开始处理频道历史视频",
+        channel=channel_name
+    )
     if not check_cookies():
         return False
     
     ydl_opts = get_ydl_opts()
-    print("已配置下载选项 (将使用临时目录)")
+    logger.debug("已配置下载选项 (将使用临时目录)")
     
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         try:
-            print("正在获取频道信息...")
+            logger.info("正在获取频道信息...")
             info_dict = ydl.extract_info(f"{yt_base_url}{channel_name}", download=False)
             if not info_dict:
-                print(f"无法获取频道信息: {channel_name}")
+                logger.error(f"无法获取频道信息: {channel_name}")
                 return False
                 
-            print("正在处理视频列表以查找目标视频...")
+            logger.info("正在处理视频列表以查找目标视频...")
             entries = info_dict.get("entries", [])
             if not entries:
-                print("未找到任何视频条目")
+                logger.warning("未找到任何视频条目")
                 return False
 
             closest_video = None
@@ -516,15 +805,19 @@ def dl_audio_closest_after(au_folder, channel_name, target_timestamp=None):
                 closest_video = oldest_video
             
             if not closest_video:
-                print("根据时间戳未找到合适视频")
+                logger.warning("根据时间戳未找到合适视频")
                 return False
             
             video_webpage_url = closest_video.get("webpage_url")
             if not video_webpage_url:
-                print(f"选定视频没有webpage_url: {closest_video.get('title', '未知')}")
+                logger.error(f"选定视频没有webpage_url: {closest_video.get('title', '未知')}")
                 return False
 
-            print(f"选定要下载的历史视频: {closest_video.get('title', '未知标题')}")
+            log_with_context(
+                logger, logging.INFO,
+                "选定要下载的历史视频",
+                title=closest_video.get('title', '未知标题')
+            )
 
             uploader = closest_video.get('uploader', 'UnknownUploader')
             fulltitle = closest_video.get('fulltitle', closest_video.get('title', 'UnknownTitle'))
@@ -538,7 +831,7 @@ def dl_audio_closest_after(au_folder, channel_name, target_timestamp=None):
             final_destination_audio_path = os.path.join(au_folder, f"{final_audio_filename_stem}{expected_audio_ext}")
 
             if os.path.exists(final_destination_audio_path):
-                print(f"  最终音频文件已存在于目标目录: {final_destination_audio_path}，跳过。")
+                logger.debug(f"最终音频文件已存在，跳过: {final_destination_audio_path}")
                 timestamp_to_update = closest_video.get("timestamp", closest_video.get("upload_date"))
                 if timestamp_to_update:
                     if isinstance(timestamp_to_update, str):
@@ -558,11 +851,15 @@ def dl_audio_closest_after(au_folder, channel_name, target_timestamp=None):
                 single_video_downloader.download([video_webpage_url])
 
             if os.path.exists(expected_temp_audio_path):
-                print(f"    历史视频转换后音频已在临时目录: {expected_temp_audio_path}")
+                logger.info(f"历史视频转换后音频已在临时目录: {expected_temp_audio_path}")
                 if safe_move_file(expected_temp_audio_path, final_destination_audio_path):
-                    print(f"    成功将历史视频音频移动到: {final_destination_audio_path}")
+                    log_with_context(
+                        logger, logging.INFO,
+                        "成功移动历史视频音频",
+                        destination=final_destination_audio_path
+                    )
                 else:
-                    print(f"    历史视频移动失败，跳过此文件")
+                    logger.error(f"历史视频移动失败，跳过此文件")
 
                 timestamp_to_update = closest_video.get("timestamp", closest_video.get("upload_date"))
                 if timestamp_to_update:
@@ -571,17 +868,22 @@ def dl_audio_closest_after(au_folder, channel_name, target_timestamp=None):
                     update_channel_info_file(channel_name, timestamp_to_update, STORY_FILE)
                 return True
             else:
-                print(f"错误: 历史视频转换后的音频文件 {expected_temp_audio_path} 在临时目录中未找到！")
+                logger.error(f"历史视频转换后的音频文件在临时目录中未找到: {expected_temp_audio_path}")
                 return False
             
         except Exception as e:
-            print(f"处理历史视频 {channel_name} 时发生错误: {str(e)}")
+            log_with_context(
+                logger, logging.ERROR,
+                "处理历史视频时发生错误",
+                channel=channel_name,
+                error=str(e)
+            )
             return False
 
 
 def read_and_process_channels(channels_file_path, au_folder):
     if not os.path.exists(channels_file_path):
-        print(f"No channel info file found at {channels_file_path}")
+        logger.error(f"No channel info file found at {channels_file_path}")
         return
 
     with open(channels_file_path, "r", encoding="utf-8") as f:
@@ -592,5 +894,10 @@ def read_and_process_channels(channels_file_path, au_folder):
         channel_name = parts[0]
         timestamp = int(parts[1]) if len(parts) > 1 else None
 
-        print(f"Processing channel {channel_name} with timestamp {timestamp}")
+        log_with_context(
+            logger, logging.INFO,
+            "Processing channel",
+            channel=channel_name,
+            timestamp=timestamp
+        )
         dl_audio_closest_after(AUDIO_FOLDER, channel_name, timestamp)

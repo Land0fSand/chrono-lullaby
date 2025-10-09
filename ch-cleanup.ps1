@@ -80,26 +80,38 @@ foreach ($path in $possiblePaths) {
 }
 
 # 尝试清理日志文件
+Write-Host "📁 等待文件释放..." -ForegroundColor Cyan
+Start-Sleep -Seconds 3  # 多等待一会儿，因为是超级清理模式
+
 Write-Host "📁 尝试清理日志文件..." -ForegroundColor Cyan
 try {
     $possiblePaths = @(".", (Split-Path $MyInvocation.MyCommand.Path -Parent))
+    $totalDeleted = 0
+    $totalFailed = 0
+    
     foreach ($path in $possiblePaths) {
         $logDir = Join-Path $path "logs"
         if (Test-Path $logDir) {
             $logFiles = Get-ChildItem -Path $logDir -File -ErrorAction SilentlyContinue
             foreach ($file in $logFiles) {
                 try {
-                    # 强制关闭文件句柄
-                    $file.Close()
-                    # 使用递归删除
-                    Remove-Item $file.FullName -Force -Recurse -ErrorAction SilentlyContinue
-                    Write-Host "✅ 已删除日志: $($file.Name)" -ForegroundColor Green
+                    Remove-Item $file.FullName -Force -ErrorAction Stop
+                    $totalDeleted++
                 }
                 catch {
-                    Write-Host "❌ 无法删除 $($file.Name): $($_.Exception.Message)" -ForegroundColor Red
+                    $totalFailed++
+                    # 静默失败，避免刷屏
                 }
             }
         }
+    }
+    
+    if ($totalDeleted -gt 0) {
+        Write-Host "✅ 已删除 $totalDeleted 个日志文件" -ForegroundColor Green
+    }
+    if ($totalFailed -gt 0) {
+        Write-Host "⚠️ 有 $totalFailed 个日志文件无法删除" -ForegroundColor Yellow
+        Write-Host "💡 建议手动删除 logs 目录，或稍后重试" -ForegroundColor Cyan
     }
 }
 catch {
