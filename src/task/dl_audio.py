@@ -645,6 +645,26 @@ def dl_audio_latest(channel_name):
                             'status': 'member_only',
                             'reason': '会员专属内容'
                         })
+                    elif "premieres in" in error_str.lower() or "premiere" in error_str.lower():
+                        # YouTube Premiere（首映）视频，尚未到首映时间
+                        premiere_info = error_str.split(":")[-1].strip() if ":" in error_str else "待首映"
+                        log_with_context(
+                            logger, logging.INFO,
+                            "⏰ 视频待首映，暂时跳过",
+                            channel=channel_name,
+                            video_index=f"{idx}/{stats['total']}",
+                            title=video_title,
+                            video_id=video_id,
+                            premiere_info=premiere_info
+                        )
+                        stats['filtered'] += 1
+                        stats['details'].append({
+                            'index': idx,
+                            'title': video_title,
+                            'id': video_id,
+                            'status': 'premiere',
+                            'reason': f'待首映: {premiere_info}'
+                        })
                     else:
                         log_with_context(
                             logger, logging.ERROR,
@@ -725,6 +745,7 @@ def dl_audio_latest(channel_name):
                         'filtered': '🚫',
                         'archived': '📚',
                         'member_only': '🔒',
+                        'premiere': '⏰',
                         'error': '❌',
                         'no_url': '⚠️'
                     }.get(detail['status'], '❓')
@@ -736,18 +757,33 @@ def dl_audio_latest(channel_name):
         
         except Exception as e:
             import traceback
+            error_str = str(e)
             traceback_str = ''.join(traceback.format_tb(e.__traceback__))
+            
+            # 检查是否为 YouTube Premiere（首映）视频
+            if "premieres in" in error_str.lower() or "premiere" in error_str.lower():
+                log_with_context(
+                    logger, logging.INFO,
+                    "频道包含待首映视频，跳过处理",
+                    channel=channel_name,
+                    info=error_str
+                )
+                logger.info(f"提示：频道 {channel_name} 有视频尚未首映，稍后会自动下载")
+                return True  # 不算错误，返回成功
+            
+            # 记录实际错误
             log_with_context(
                 logger, logging.ERROR,
                 "处理频道时发生错误",
                 channel=channel_name,
-                error=str(e),
+                error=error_str,
                 error_type=type(e).__name__,
                 traceback=traceback_str
             )
-            if "HTTP Error 404" in str(e):
+            
+            if "HTTP Error 404" in error_str:
                 logger.error(f"频道 {channel_name} 不存在或无法访问，请检查频道名称是否正确。")
-            elif any(msg in str(e).lower() for msg in ["sign in to confirm", "unable to download api page", "not a bot", "consent"]):
+            elif any(msg in error_str.lower() for msg in ["sign in to confirm", "unable to download api page", "not a bot", "consent"]):
                 logger.error("Cookies可能已过期或需要同意YouTube政策！")
                 logger.info("请按以下步骤更新cookies：")
                 logger.info("1. (浏览器) 清除youtube.com的cookies，访问YouTube并确保已登录及处理任何弹窗。")
