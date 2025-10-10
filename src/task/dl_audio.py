@@ -55,6 +55,36 @@ class TimestampedYTDLLogger:
 
 yt_base_url = "https://www.youtube.com/"
 
+# 文件系统非法字符（Windows + Linux）
+ILLEGAL_FILENAME_CHARS = '<>:"/\\|?*'
+
+
+def sanitize_filename(filename: str) -> str:
+    """
+    智能清理文件名：
+    - 保留所有可见字符（中文、英文、标点、表情、特殊符号等）
+    - 只替换文件系统非法字符和不可见字符
+    
+    Args:
+        filename: 原始文件名
+    
+    Returns:
+        清理后的安全文件名
+    """
+    result = []
+    for char in filename:
+        # 检查是否为文件系统非法字符
+        if char in ILLEGAL_FILENAME_CHARS:
+            result.append('_')
+        # 检查是否为可打印字符（排除控制字符、零宽字符等不可见字符）
+        elif char.isprintable():
+            result.append(char)
+        # 不可见字符替换为下划线
+        else:
+            result.append('_')
+    
+    return ''.join(result)
+
 
 def safe_rename_file(src, dst, max_retries=5):
     """
@@ -268,13 +298,11 @@ def get_ydl_opts(custom_opts=None):
         logger.info(f"已创建音频目录: {AUDIO_FOLDER}")
 
     # 使用 .tmp 后缀来标记正在下载的文件
-    # FFmpeg后处理器会在outtmpl指定的文件名后自动添加扩展名，最终格式：filename.tmp.m4a
+    # 注意：FFmpeg后处理器会替换文件扩展名，所以我们只用一个模板
+    # 最终格式：filename.tmp.m4a (yt-dlp下载为filename.tmp，FFmpeg转换为filename.tmp.m4a)
     base_opts = {
         "format": "bestaudio/best",
-        "outtmpl": {
-            'default': os.path.join(AUDIO_FOLDER, "%(uploader)s.%(fulltitle)s.%(ext)s.tmp"),
-            'aac': os.path.join(AUDIO_FOLDER, "%(uploader)s.%(fulltitle)s.tmp"),  # FFmpeg会自动添加.m4a
-        },
+        "outtmpl": os.path.join(AUDIO_FOLDER, "%(uploader)s.%(fulltitle)s.tmp"),
         "logger": TimestampedYTDLLogger(),  # 使用自定义日志格式
         "postprocessors": [
             {
@@ -448,16 +476,16 @@ def dl_audio_latest(channel_name):
                 
                 uploader = video_info.get('uploader') or 'UnknownUploader'
                 fulltitle = video_info.get('fulltitle') or video_info.get('title') or 'UnknownTitle'
-                safe_title = "".join(c if c.isalnum() or c in " .-_()" else "_" for c in fulltitle)
-                safe_uploader = "".join(c if c.isalnum() or c in " .-_()" else "_" for c in uploader)
+                # 使用新的智能文件名清理函数
+                safe_title = sanitize_filename(fulltitle)
+                safe_uploader = sanitize_filename(uploader)
 
                 expected_audio_ext = ".m4a"
                 final_audio_filename_stem = f"{safe_uploader}.{safe_title}"
                 
-                # 临时文件使用 .tmp 后缀
-                # 注意：FFmpegExtractAudio 实际输出格式是 .m4a.tmp（不是.tmp.m4a）
+                # 临时文件格式：filename.tmp.m4a (yt-dlp下载为filename.tmp，FFmpeg转换为filename.tmp.m4a)
                 temp_audio_path_without_ext = os.path.join(AUDIO_FOLDER, final_audio_filename_stem)
-                expected_temp_audio_path = temp_audio_path_without_ext + expected_audio_ext + ".tmp"
+                expected_temp_audio_path = temp_audio_path_without_ext + ".tmp" + expected_audio_ext
 
                 # 正式文件路径（不带 .tmp）
                 final_destination_audio_path = os.path.join(AUDIO_FOLDER, f"{final_audio_filename_stem}{expected_audio_ext}")
@@ -483,15 +511,13 @@ def dl_audio_latest(channel_name):
                     continue
                 
                 current_video_ydl_opts = ydl_opts.copy()
-                current_video_ydl_opts['outtmpl'] = {
-                    'default': temp_audio_path_without_ext + '.%(ext)s.tmp',
-                    'aac': temp_audio_path_without_ext + '.tmp'  # FFmpeg会自动添加.m4a
-                }
+                # FFmpeg后处理器会将 filename.tmp 转换为 filename.tmp.m4a
+                current_video_ydl_opts['outtmpl'] = temp_audio_path_without_ext + '.tmp'
 
                 log_with_context(
                     logger, logging.DEBUG,
                     "下载路径配置",
-                    temp_template=f"{temp_audio_path_without_ext}.%(ext)s.tmp",
+                    temp_template=f"{temp_audio_path_without_ext}.tmp",
                     expected_temp=expected_temp_audio_path,
                     final_destination=final_destination_audio_path
                 )
@@ -855,10 +881,9 @@ def dl_audio_closest_after(au_folder, channel_name, target_timestamp=None):
             expected_audio_ext = ".m4a"
             final_audio_filename_stem = f"{safe_uploader}.{safe_title}"
 
-            # 临时文件使用 .tmp 后缀
-            # 注意：FFmpegExtractAudio 实际输出格式是 .m4a.tmp（不是.tmp.m4a）
+            # 临时文件格式：filename.tmp.m4a (yt-dlp下载为filename.tmp，FFmpeg转换为filename.tmp.m4a)
             temp_audio_path_without_ext = os.path.join(au_folder, final_audio_filename_stem)
-            expected_temp_audio_path = temp_audio_path_without_ext + expected_audio_ext + ".tmp"
+            expected_temp_audio_path = temp_audio_path_without_ext + ".tmp" + expected_audio_ext
             final_destination_audio_path = os.path.join(au_folder, f"{final_audio_filename_stem}{expected_audio_ext}")
 
             if os.path.exists(final_destination_audio_path):
@@ -871,10 +896,8 @@ def dl_audio_closest_after(au_folder, channel_name, target_timestamp=None):
                 return True
 
             single_video_ydl_opts = ydl_opts.copy()
-            single_video_ydl_opts['outtmpl'] = {
-                'default': temp_audio_path_without_ext + '.%(ext)s.tmp',
-                'aac': temp_audio_path_without_ext + '.tmp'  # FFmpeg会自动添加.m4a
-            }
+            # FFmpeg后处理器会将 filename.tmp 转换为 filename.tmp.m4a
+            single_video_ydl_opts['outtmpl'] = temp_audio_path_without_ext + '.tmp'
             single_video_ydl_opts.pop('playlistend', None) 
             single_video_ydl_opts.pop('match_filter', None)
 
