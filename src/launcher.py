@@ -138,10 +138,10 @@ class ProcessManager:
             }
             
             import json
-            with open('../process_info.json', 'w', encoding='utf-8') as f:
+            with open('../data/process_info.json', 'w', encoding='utf-8') as f:
                 json.dump(process_info, f, indent=2, ensure_ascii=False)
             
-            logger.info("进程信息已保存到 process_info.json")
+            logger.info("进程信息已保存到 data/process_info.json")
             logger.info("服务正在运行...")
             
             # 监控进程状态

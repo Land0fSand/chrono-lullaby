@@ -10,20 +10,21 @@ param(
 Write-Host "=== ChronoLullaby 日志查看器 ===" -ForegroundColor Green
 
 function Find-ProjectRoot {
-    # 首先检查当前目录是否有process_info.json
-    if (Test-Path "process_info.json") {
+    # 首先检查当前目录是否有pyproject.toml
+    if (Test-Path "pyproject.toml") {
         return (Get-Location).Path
     }
-    
-    # 检查脚本所在目录
+
+    # 检查脚本所在目录的父目录（因为脚本现在在 scripts/ 子目录下）
     $scriptPath = $MyInvocation.MyCommand.Path
     if ($scriptPath) {
         $scriptDir = Split-Path $scriptPath -Parent
-        if (Test-Path (Join-Path $scriptDir "process_info.json")) {
-            return $scriptDir
+        $parentDir = Split-Path $scriptDir -Parent
+        if (Test-Path (Join-Path $parentDir "pyproject.toml")) {
+            return $parentDir
         }
     }
-    
+
     # 如果都找不到，返回null
     return $null
 }
@@ -80,7 +81,7 @@ if ($List) {
 }
 
 function Get-LatestLogFiles {
-    $processInfoPath = Join-Path $projectRoot "process_info.json"
+    $processInfoPath = Join-Path $projectRoot "data/process_info.json"
     
     if (Test-Path $processInfoPath) {
         try {

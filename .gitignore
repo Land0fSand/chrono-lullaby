@@ -112,10 +112,14 @@ mypy.ini
 # this project
 /au
 /au_temp
-/download_archive.txt
-/channels.txt
-youtube.cookies
+
+# config files (keep example files only)
+/config/config.yaml
+/config/channels.txt
+/config/youtube.cookies
+
+# runtime data
+/data/
 
 # logs and process info
 /logs/
-process_info.json

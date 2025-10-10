@@ -67,7 +67,7 @@ if ($cmdProcesses) {
 Write-Host "🧹 清理进程信息文件..." -ForegroundColor Cyan
 $possiblePaths = @(".", (Split-Path $MyInvocation.MyCommand.Path -Parent))
 foreach ($path in $possiblePaths) {
-    $file = Join-Path $path "process_info.json"
+    $file = Join-Path $path "data/process_info.json"
     if (Test-Path $file) {
         try {
             Remove-Item $file -Force

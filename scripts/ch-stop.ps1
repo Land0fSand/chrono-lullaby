@@ -5,17 +5,18 @@ Write-Host "此脚本将强制停止所有相关进程，包括子进程和僵�
 Write-Host "如果日志文件删除失败，可以使用 'ch-cleanup' 脚本" -ForegroundColor Cyan
 
 function Find-ProjectRoot {
-    # 首先检查当前目录是否有process_info.json
-    if (Test-Path "process_info.json") {
+    # 首先检查当前目录是否有pyproject.toml
+    if (Test-Path "pyproject.toml") {
         return (Get-Location).Path
     }
 
-    # 检查脚本所在目录
+    # 检查脚本所在目录的父目录（因为脚本现在在 scripts/ 子目录下）
     $scriptPath = $MyInvocation.MyCommand.Path
     if ($scriptPath) {
         $scriptDir = Split-Path $scriptPath -Parent
-        if (Test-Path (Join-Path $scriptDir "process_info.json")) {
-            return $scriptDir
+        $parentDir = Split-Path $scriptDir -Parent
+        if (Test-Path (Join-Path $parentDir "pyproject.toml")) {
+            return $parentDir
         }
     }
 
@@ -144,7 +145,7 @@ if (-not $projectRoot) {
     exit 0
 }
 
-$processInfoPath = Join-Path $projectRoot "process_info.json"
+$processInfoPath = Join-Path $projectRoot "data/process_info.json"
 
 # 检查进程信息文件
 if (Test-Path $processInfoPath) {

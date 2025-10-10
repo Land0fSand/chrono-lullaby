@@ -18,8 +18,8 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # ============================================================
 # 配置文件路径
 # ============================================================
-CONFIG_YAML_FILE = os.path.join(PROJECT_ROOT, "config.yaml")
-CHANNELS_FILE = os.path.join(PROJECT_ROOT, "channels.txt")
+CONFIG_YAML_FILE = os.path.join(PROJECT_ROOT, "config", "config.yaml")
+CHANNELS_FILE = os.path.join(PROJECT_ROOT, "config", "channels.txt")
 ENV_FILE = os.path.join(PROJECT_ROOT, ".env")
 DEBUG_INFO = os.path.join(PROJECT_ROOT, "debug_closest_video.json")
 STORY_FILE = os.path.join(PROJECT_ROOT, "story.txt")
@@ -97,14 +97,14 @@ def get_audio_folder() -> str:
 
 def get_cookies_file() -> str:
     """获取 Cookies 文件路径"""
-    cookies_file = get_config_value('downloader.cookies_file', 'youtube.cookies')
+    cookies_file = get_config_value('downloader.cookies_file', 'config/youtube.cookies')
     if os.path.isabs(cookies_file):
         return cookies_file
     return os.path.join(PROJECT_ROOT, cookies_file)
 
 def get_download_archive() -> str:
     """获取下载存档文件路径"""
-    archive_file = get_config_value('downloader.download_archive', 'download_archive.txt')
+    archive_file = get_config_value('downloader.download_archive', 'data/download_archive.txt')
     if os.path.isabs(archive_file):
         return archive_file
     return os.path.join(PROJECT_ROOT, archive_file)
