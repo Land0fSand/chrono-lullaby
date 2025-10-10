@@ -109,6 +109,27 @@ def get_download_archive() -> str:
         return archive_file
     return os.path.join(PROJECT_ROOT, archive_file)
 
+def get_sent_archive_path(chat_id: str, readable: bool = False) -> str:
+    """
+    获取频道已发送记录文件路径
+    
+    Args:
+        chat_id: Telegram 频道 ID
+        readable: 是否为人类可读格式
+    
+    Returns:
+        文件路径
+    """
+    # 清理 chat_id，去除负号和特殊字符
+    clean_id = str(chat_id).replace('-', '').replace('+', '')
+    
+    if readable:
+        filename = f"sent_archive_{clean_id}_readable.txt"
+    else:
+        filename = f"sent_archive_{clean_id}.txt"
+    
+    return os.path.join(PROJECT_ROOT, 'data', filename)
+
 # 为向后兼容，提供常量
 AUDIO_FOLDER = get_audio_folder()
 COOKIES_FILE = get_cookies_file()
@@ -170,13 +191,45 @@ def get_max_videos_per_channel() -> int:
     """获取每个频道检查的最大视频数"""
     return get_config_value('downloader.max_videos_per_channel', 6)
 
-def get_all_channel_groups() -> List[Dict[str, Any]]:
+def get_channel_delay_min() -> int:
+    """获取频道间最小延迟（秒）"""
+    return get_config_value('downloader.channel_delay_min', 0)
+
+def get_channel_delay_max() -> int:
+    """获取频道间最大延迟（秒）"""
+    return get_config_value('downloader.channel_delay_max', 0)
+
+def get_video_delay_min() -> int:
+    """获取视频间最小延迟（秒）"""
+    return get_config_value('downloader.video_delay_min', 120)
+
+def get_video_delay_max() -> int:
+    """获取视频间最大延迟（秒）"""
+    return get_config_value('downloader.video_delay_max', 240)
+
+def get_all_channel_groups(use_cache: bool = True) -> List[Dict[str, Any]]:
     """
     获取所有频道组配置
+    
+    Args:
+        use_cache: 是否使用缓存。True=使用缓存（默认），False=强制重新读取
     
     Returns:
         频道组列表
     """
+    if not use_cache:
+        # 强制重新读取 YAML 文件（仅读取频道组配置）
+        if not os.path.exists(CONFIG_YAML_FILE):
+            return []
+        
+        try:
+            with open(CONFIG_YAML_FILE, 'r', encoding='utf-8') as f:
+                config = yaml.safe_load(f)
+                return config.get('channel_groups', []) if config else []
+        except Exception as e:
+            print(f"警告：重新加载频道组配置失败: {e}")
+            return []
+    
     return get_config_value('channel_groups', [])
 
 # ============================================================

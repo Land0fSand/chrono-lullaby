@@ -4,6 +4,13 @@
 #   - 此文件为示例配置，复制为 config.yaml 后填入真实值
 #   - 使用 # 开头的行为注释
 #   - 如果不存在 config.yaml，程序会回退到使用 channels.txt 和 .env
+#
+# Archive 文件说明：
+#   - download_archive.txt: 所有频道组共享的下载记录（避免重复下载）
+#   - sent_archive_{CHAT_ID}.txt: 每个TG频道独立的发送记录（机器格式）
+#   - sent_archive_{CHAT_ID}_readable.txt: 每个TG频道的可读发送记录（带标题）
+#   - 详细说明：docs/ARCHIVE_FILES.md
+#   - 查看工具：.\scripts\view_sent_records.ps1 -All
 
 # ============================================================
 # Telegram Bot 配置
@@ -23,14 +30,30 @@ telegram:
 # ============================================================
 downloader:
   # 下载轮次间隔（秒）
-  # 默认 29520 秒 = 约 8.2 小时
-  download_interval: 29520
+  # 设为0表示完成一轮后立即开始下一轮（视频级延迟已足够拉开频率）
+  # 或设置为较大值如29520秒(8.2小时)以进一步拉开间隔
+  download_interval: 0
+  
+  # 单个视频之间的延迟范围（秒）
+  # 同一YouTube频道的多个视频下载之间的延迟
+  # 推荐：60-120秒（YouTube频道较多时）
+  # 极度保守：120-240秒
+  video_delay_min: 120
+  video_delay_max: 240
+  
+  # 单个YouTube频道之间的延迟（秒）
+  # 设为0表示处理完一个频道后立即处理下一个（视频级延迟已足够）
+  # 或设置为60-120秒以进一步拉开间隔
+  channel_delay_min: 0
+  channel_delay_max: 0
   
   # YouTube Cookies 文件路径（用于访问会员内容等）
   cookies_file: "youtube.cookies"
   
   # 下载存档文件（记录已下载的视频，避免重复下载）
-  download_archive: "download_archive.txt"
+  # 所有频道组共用此文件，推荐放在 data 目录
+  # 格式：youtube {video_id}（yt-dlp 标准格式）
+  download_archive: "data/download_archive.txt"
   
   # 视频过滤：只下载最近 N 天的视频
   filter_days: 3
@@ -49,6 +72,10 @@ channel_groups:
   - name: "主频道"
     description: "所有订阅的 YouTube 频道"
     
+    # 是否启用此频道组（true=启用, false=禁用）
+    # 支持热重载：修改后下一轮下载自动生效，无需重启
+    enabled: true
+    
     # Bot Token（可选）
     # 如果此组使用独立的 bot，在这里配置
     # 如果不配置，将使用全局 telegram.bot_token
@@ -56,6 +83,9 @@ channel_groups:
     
     # Telegram 聊天 ID（频道/群组）
     # 使用 /start 命令或让bot接收消息来获取 chat_id
+    # 注意：每个频道会自动生成独立的发送记录文件：
+    #   - data/sent_archive_{CHAT_ID}.txt (机器格式，yt-dlp兼容)
+    #   - data/sent_archive_{CHAT_ID}_readable.txt (人类可读，带视频标题)
     telegram_chat_id: "YOUR_CHAT_ID_HERE"
     
     # 音频文件存储目录

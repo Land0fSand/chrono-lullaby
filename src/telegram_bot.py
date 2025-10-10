@@ -23,6 +23,7 @@ from config import (
     get_telegram_chat_id,
     get_send_interval,
 )
+from util import get_channel_groups_with_details
 from logger import get_logger
 
 # 使用统一的日志系统
@@ -49,7 +50,29 @@ if not CHAT_ID:
 
 logger.info(f"配置加载成功：发送间隔 = {SEND_INTERVAL} 秒 ({SEND_INTERVAL/3600:.2f} 小时)")
 
+def create_send_file_task(chat_id: str, audio_folder: str, group_name: str):
+    """
+    创建发送文件任务的闭包函数
+    
+    Args:
+        chat_id: Telegram 频道 ID
+        audio_folder: 音频文件夹路径
+        group_name: 频道组名称（用于日志）
+    
+    Returns:
+        发送文件的异步任务函数
+    """
+    async def send_file_task(context: ContextTypes.DEFAULT_TYPE) -> None:
+        try:
+            logger.info(f"执行发送任务 - 频道组: {group_name}")
+            await send_file(context=context, chat_id=chat_id, audio_folder=audio_folder)
+        except Exception as e:
+            logger.error(f"发送文件任务错误 (频道组: {group_name}): {e}")
+    
+    return send_file_task
+
 async def send_file_task(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """默认发送文件任务（向后兼容）"""
     try:
         await send_file(context=context, chat_id=CHAT_ID, audio_folder=AUDIO_FOLDER)
     except Exception as e:
@@ -80,14 +103,47 @@ def main():
     # 添加错误处理器
     application.add_error_handler(error_callback)
     
-    # 使用配置的发送间隔
-    # 将间隔除以32作为实际间隔，首次运行延迟为间隔的1/256
-    application.job_queue.run_repeating(
-        send_file_task,
-        interval=SEND_INTERVAL // 32,
-        first=SEND_INTERVAL // 256,
-    )
-    logger.info(f"文件发送任务已配置：每 {SEND_INTERVAL // 32} 秒检查一次")
+    # 获取频道组配置
+    channel_groups = get_channel_groups_with_details()
+    
+    if not channel_groups:
+        logger.error("❌ 未找到任何频道组配置！")
+        logger.error("请在 config.yaml 中配置 channel_groups")
+        sys.exit(1)
+    
+    logger.info(f"✅ 找到 {len(channel_groups)} 个频道组配置")
+    
+    # 为每个频道组创建独立的发送任务
+    task_interval = SEND_INTERVAL // 32
+    for idx, group in enumerate(channel_groups):
+        group_name = group['name']
+        chat_id = group['telegram_chat_id']
+        audio_folder = group['audio_folder']
+        
+        if not chat_id:
+            logger.warning(f"⚠️  频道组 '{group_name}' 未配置 telegram_chat_id，跳过")
+            continue
+        
+        # 为每个组错开启动时间，避免同时发送
+        first_delay = (SEND_INTERVAL // 256) + (idx * 10)
+        
+        # 创建该组的发送任务
+        task_func = create_send_file_task(chat_id, audio_folder, group_name)
+        application.job_queue.run_repeating(
+            task_func,
+            interval=task_interval,
+            first=first_delay,
+            name=f"send_task_{group_name}"
+        )
+        
+        logger.info(
+            f"📤 已配置发送任务: {group_name} -> {chat_id}\n"
+            f"   音频目录: {audio_folder}\n"
+            f"   检查间隔: {task_interval}秒 ({task_interval/60:.1f}分钟)\n"
+            f"   首次延迟: {first_delay}秒"
+        )
+    
+    logger.info(f"✅ 所有发送任务已配置完成")
     application.add_handler(CommandHandler("addchannel", add_channel))
     
     # 添加重试机制的轮询

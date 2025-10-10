@@ -11,7 +11,7 @@ if sys.stdout.encoding != 'utf-8':
 if sys.stderr.encoding != 'utf-8':
     sys.stderr.reconfigure(encoding='utf-8')
 
-from config import CHANNELS_FILE, get_all_channel_groups, load_yaml_config
+from config import CHANNELS_FILE, get_all_channel_groups, load_yaml_config, PROJECT_ROOT
 
 
 async def show_chat_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -72,6 +72,79 @@ def _get_channels_from_yaml() -> Tuple[str, ...]:
         print(f"从 config.yaml 读取频道列表时出错: {e}")
         print("将尝试从 channels.txt 读取")
         return _get_channels_from_txt()
+
+def get_channel_groups_with_details(reload: bool = False) -> List[dict]:
+    """
+    获取所有频道组的详细信息（用于多频道支持）
+    
+    Args:
+        reload: 是否强制重新读取配置文件（用于热重载频道列表）
+    
+    Returns:
+        频道组列表，每个组包含：
+        - name: 组名称
+        - youtube_channels: YouTube频道列表
+        - audio_folder: 音频保存目录（绝对路径）
+        - telegram_chat_id: Telegram频道ID
+    """
+    if load_yaml_config() is None:
+        # 如果没有YAML配置，返回单个默认组
+        from config import AUDIO_FOLDER
+        return [{
+            'name': '默认组',
+            'youtube_channels': list(_get_channels_from_txt()),
+            'audio_folder': AUDIO_FOLDER,
+            'telegram_chat_id': None
+        }]
+    
+    try:
+        # 根据 reload 参数决定是否使用缓存
+        channel_groups = get_all_channel_groups(use_cache=not reload)
+        
+        if not channel_groups:
+            print("警告：config.yaml 中未找到频道组配置")
+            return []
+        
+        result = []
+        disabled_groups = []
+        
+        for group in channel_groups:
+            # 检查是否启用（默认为 true）
+            enabled = group.get('enabled', True)
+            group_name = group.get('name', '未命名组')
+            
+            if not enabled:
+                disabled_groups.append(group_name)
+                continue  # 跳过禁用的频道组
+            
+            # 获取音频目录（转换为绝对路径）
+            audio_folder = group.get('audio_folder', 'au')
+            if not os.path.isabs(audio_folder):
+                audio_folder = os.path.join(PROJECT_ROOT, audio_folder)
+            
+            result.append({
+                'name': group_name,
+                'youtube_channels': group.get('youtube_channels', []),
+                'audio_folder': audio_folder,
+                'telegram_chat_id': group.get('telegram_chat_id'),
+                'enabled': enabled
+            })
+        
+        if reload:
+            msg = f"🔄 热重载：从 config.yaml 重新加载了 {len(result)} 个启用的频道组"
+            if disabled_groups:
+                msg += f"（已禁用: {', '.join(disabled_groups)}）"
+            print(msg)
+        else:
+            msg = f"从 config.yaml 加载了 {len(result)} 个启用的频道组"
+            if disabled_groups:
+                msg += f"（已禁用: {', '.join(disabled_groups)}）"
+            print(msg)
+        return result
+    
+    except Exception as e:
+        print(f"从 config.yaml 读取频道组时出错: {e}")
+        return []
 
 def _get_channels_from_txt() -> Tuple[str, ...]:
     """从 channels.txt 文件读取频道列表（向后兼容）"""

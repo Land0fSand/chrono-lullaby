@@ -15,9 +15,91 @@ from telegram.ext import ContextTypes
 from telegram.error import TimedOut, TelegramError
 from contextlib import suppress
 from logger import get_logger, log_with_context
+from config import get_sent_archive_path
 
 # 使用统一的日志系统
 logger = get_logger('bot.send_file')
+
+
+def extract_video_info_from_filename(filename: str) -> tuple:
+    """
+    从文件名中提取视频ID和标题
+    
+    文件名格式: {video_id}.{title}.m4a 或 {video_id}.{title}_1.m4a (分段文件)
+    
+    Args:
+        filename: 文件名
+    
+    Returns:
+        (video_id, title) 元组
+    """
+    base_name = os.path.splitext(filename)[0]  # 去掉扩展名
+    
+    # 处理分段文件（例如：video_id.title_1）
+    if '_' in base_name:
+        parts = base_name.split('_')
+        if parts[-1].isdigit():
+            base_name = '_'.join(parts[:-1])
+    
+    # 分割 video_id 和 title
+    parts = base_name.split('.', 1)
+    if len(parts) == 2:
+        video_id = parts[0]
+        title = parts[1]
+    else:
+        # 如果格式不符合预期，使用整个文件名作为标题
+        video_id = base_name
+        title = base_name
+    
+    return video_id, title
+
+
+def record_sent_file(chat_id: str, video_id: str, title: str) -> None:
+    """
+    记录已发送的文件到两个archive文件
+    
+    Args:
+        chat_id: Telegram 频道 ID
+        video_id: YouTube 视频 ID
+        title: 视频标题
+    """
+    try:
+        # 1. 记录机器格式（yt-dlp 格式）
+        machine_archive = get_sent_archive_path(chat_id, readable=False)
+        machine_line = f"youtube {video_id}\n"
+        
+        # 检查是否已存在，避免重复记录
+        if os.path.exists(machine_archive):
+            with open(machine_archive, 'r', encoding='utf-8') as f:
+                if machine_line in f.read():
+                    logger.debug(f"视频 {video_id} 已在发送记录中")
+                    return
+        
+        with open(machine_archive, 'a', encoding='utf-8') as f:
+            f.write(machine_line)
+        
+        # 2. 记录人类可读格式
+        readable_archive = get_sent_archive_path(chat_id, readable=True)
+        readable_line = f"{video_id} [{title}]\n"
+        
+        with open(readable_archive, 'a', encoding='utf-8') as f:
+            f.write(readable_line)
+        
+        log_with_context(
+            logger, logging.DEBUG,
+            "已记录发送记录",
+            video_id=video_id,
+            chat_id=chat_id
+        )
+        
+    except Exception as e:
+        log_with_context(
+            logger, logging.ERROR,
+            "记录发送记录失败",
+            video_id=video_id,
+            chat_id=chat_id,
+            error=str(e)
+        )
 
 
 async def send_file(context: ContextTypes.DEFAULT_TYPE, chat_id, audio_folder) -> None:
@@ -299,10 +381,16 @@ async def send_single_file(context: ContextTypes.DEFAULT_TYPE, chat_id, file_pat
                     performer=performer,
                     # Consider adding duration if easily obtainable from ffmpeg.probe and passing it
                 )
+        
+        # 记录已发送的文件
+        video_id, video_title = extract_video_info_from_filename(os.path.basename(file_path))
+        record_sent_file(chat_id, video_id, video_title)
+        
         log_with_context(
             logger, logging.INFO,
             "文件发送成功",
-            file_name=os.path.basename(file_path)
+            file_name=os.path.basename(file_path),
+            video_id=video_id
         )
     except TelegramError as te:
         log_with_context(
