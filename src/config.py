@@ -29,16 +29,19 @@ STORY_FILE = os.path.join(PROJECT_ROOT, "story.txt")
 # ============================================================
 _config_cache: Optional[Dict[str, Any]] = None
 
-def load_yaml_config() -> Optional[Dict[str, Any]]:
+def load_yaml_config(reload: bool = False) -> Optional[Dict[str, Any]]:
     """
     加载 YAML 配置文件
+    
+    Args:
+        reload: 是否强制重新加载配置（不使用缓存）
     
     Returns:
         配置字典，如果文件不存在或加载失败则返回 None
     """
     global _config_cache
     
-    if _config_cache is not None:
+    if _config_cache is not None and not reload:
         return _config_cache
     
     if not os.path.exists(CONFIG_YAML_FILE):
@@ -53,18 +56,19 @@ def load_yaml_config() -> Optional[Dict[str, Any]]:
         print("将回退到使用 channels.txt 和 .env")
         return None
 
-def get_config_value(key_path: str, default: Any = None) -> Any:
+def get_config_value(key_path: str, default: Any = None, reload: bool = False) -> Any:
     """
     从 YAML 配置中获取值，支持点号路径
     
     Args:
         key_path: 配置键路径，如 "telegram.bot_token"
         default: 默认值
+        reload: 是否强制重新加载配置（不使用缓存）
     
     Returns:
         配置值或默认值
     """
-    config = load_yaml_config()
+    config = load_yaml_config(reload=reload)
     if config is None:
         return default
     
@@ -184,12 +188,12 @@ def get_download_interval() -> int:
     return get_config_value('downloader.download_interval', 29520)
 
 def get_filter_days() -> int:
-    """获取视频过滤天数"""
-    return get_config_value('downloader.filter_days', 3)
+    """获取视频过滤天数（支持热重载）"""
+    return get_config_value('downloader.filter_days', 3, reload=True)
 
 def get_max_videos_per_channel() -> int:
-    """获取每个频道检查的最大视频数"""
-    return get_config_value('downloader.max_videos_per_channel', 6)
+    """获取每个频道检查的最大视频数（支持热重载）"""
+    return get_config_value('downloader.max_videos_per_channel', 6, reload=True)
 
 def get_channel_delay_min() -> int:
     """获取频道间最小延迟（秒）"""

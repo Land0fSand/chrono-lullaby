@@ -22,6 +22,8 @@ from config import (
     COOKIES_FILE,
     get_video_delay_min,
     get_video_delay_max,
+    get_filter_days,
+    get_max_videos_per_channel,
 )
 from logger import get_logger, log_with_context
 import random
@@ -180,7 +182,7 @@ def combined_filter(info_dict):
 
 
 def oneday_filter(info_dict):
-    """过滤最近3天的视频"""
+    """过滤最近N天的视频（N从配置读取）"""
     try:
         timestamp = info_dict.get("timestamp")
         upload_datetime = None
@@ -199,15 +201,16 @@ def oneday_filter(info_dict):
             # 无时间信息，不过滤
             return None
             
-        # 检查是否在3天内
-        three_days_ago = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=3)
+        # 从配置读取过滤天数（支持热重载）
+        filter_days = get_filter_days()
+        days_ago = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=filter_days)
         
-        if upload_datetime > three_days_ago:
-            # 通过过滤（最近3天的视频）
+        if upload_datetime > days_ago:
+            # 通过过滤（最近N天的视频）
             return None
         else:
-            # 拒绝（超过3天）
-            return "视频超过3天"
+            # 拒绝（超过N天）
+            return f"视频超过{filter_days}天"
             
     except Exception as e:
         logger.warning(f"过滤器错误: {str(e)}")
@@ -256,7 +259,7 @@ def get_ydl_opts(custom_opts=None):
         "sleep_interval": 88,
         "max_sleep_interval": 208,
         "random_sleep": True,
-        "ignoreerrors": False,  # 改为False，让过滤器处理会员内容
+        "ignoreerrors": True,  # 跳过错误视频（如会员内容），继续处理其他视频
         "format_sort": ["+hasaud", "+hasvid", "+codec:opus", "+codec:aac", "+codec:mp3"],
         "format_fallback": True,
         "progress_hooks": [progress_hook],
@@ -336,9 +339,12 @@ def dl_audio_latest(channel_name, audio_folder=None, group_name=None):
         os.makedirs(target_folder)
         logger.info(f"已创建音频目录: {target_folder}")
 
+    # 从配置读取最大视频数（支持热重载）
+    max_videos = get_max_videos_per_channel()
+    
     custom_opts = {
         "download_archive": DOWNLOAD_ARCHIVE,
-        "playlistend": 6,
+        "playlistend": max_videos,
         "match_filter": combined_filter,
         "keepvideo": False,
         "outtmpl": os.path.join(target_folder, "%(uploader)s.%(id)s.%(title)s.%(ext)s"),  # 文件名格式：{频道名}.{video_id}.{title}.m4a
@@ -708,6 +714,16 @@ def dl_audio_latest(channel_name, audio_folder=None, group_name=None):
             if "premieres in" in error_str.lower() or "premiere" in error_str.lower():
                 logger.info(f"频道 {channel_name} 包含待首映视频，稍后自动下载")
                 return True  # 不算错误，返回成功
+            
+            # 检查是否为会员专属内容错误（频道视频都是会员内容时会在获取列表阶段就报错）
+            if ("members-only" in error_str.lower() or 
+                ("member" in error_str.lower() and "join this channel" in error_str.lower())):
+                log_with_context(
+                    logger, logging.INFO,
+                    f"⏭️ 频道当前视频为会员专属，跳过",
+                    channel=channel_name
+                )
+                return True  # 不算错误，只是暂时没有可下载内容
             
             # 记录实际错误（不包含 traceback，避免日志过长）
             # 只保留错误消息的前200个字符
