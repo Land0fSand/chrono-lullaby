@@ -127,7 +127,13 @@ ch cleanup
 
 ## Bot 功能
 
-- `/add <频道URL>` - 添加新频道
+### Telegram 命令
+
+- `/chatid` - 获取当前频道的 Chat ID（用于配置）
+- `/addchannel <频道URL>` - 添加新频道到监控列表
+
+### 自动功能
+
 - 自动发送到配置的 Telegram 频道
 - 大文件自动分割（每段 ≤45MB）
 - 失败自动重试（3 次）

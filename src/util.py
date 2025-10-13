@@ -15,23 +15,83 @@ from config import CHANNELS_FILE, get_all_channel_groups, load_yaml_config, PROJ
 
 
 async def show_chat_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Process the received message and print `chat_id`.
-
-    Due to Telegram Bot API restrictions, it is not possible to directly obtain the chat_id; it needs to be acquired through the message object.
-    If you are not the type of bot that replies to messages but instead sends messages directly, then you need to obtain the chat_id.
-    This method provides a way to obtain the chat_id. For example, you use this type of code:
-    application.add_handler(MessageHandler(filters.TEXT, show_chat_id))
-    Then, when a user types something in the current channel, this method will print the chat_id.
-
-        Args:
-            update (Update): A Telegram update object that contains message and chat information.
-            context (ContextTypes.DEFAULT_TYPE): A context object that contains related callback data.
-
-        Returns:
-            None
     """
-    chat_id = update.message.chat_id
-    print(f"Received a message from chat ID: {chat_id}")
+    处理 /chatid 命令，显示当前频道的 chat_id
+    
+    这个命令可以在任何频道（包括私有频道）中使用，用于获取该频道的 chat_id。
+    Bot 会回复一条消息，包含频道的 chat_id 和频道类型信息。
+    
+    使用方法：
+        在任何频道中发送：/chatid
+        
+    Bot 会回复：
+        📍 频道信息
+        Chat ID: -1001234567890
+        类型: supergroup
+        标题: 我的频道
+    
+    Args:
+        update (Update): Telegram 更新对象，包含消息和频道信息
+        context (ContextTypes.DEFAULT_TYPE): 上下文对象，包含相关回调数据
+    
+    Returns:
+        None
+    """
+    try:
+        # 获取频道信息
+        chat = update.effective_chat
+        chat_id = chat.id
+        chat_type = chat.type
+        chat_title = chat.title if chat.title else "未命名"
+        
+        # 构建回复消息
+        response = f"📍 频道信息\n\n"
+        response += f"💬 Chat ID: `{chat_id}`\n"
+        response += f"📂 类型: {chat_type}\n"
+        response += f"📌 标题: {chat_title}\n"
+        
+        # 如果是私聊，显示用户信息
+        if chat_type == "private":
+            user = update.effective_user
+            response += f"👤 用户: {user.full_name}"
+            if user.username:
+                response += f" (@{user.username})"
+            response += "\n"
+        
+        response += f"\n💡 提示：复制上面的 Chat ID 到配置文件中使用"
+        
+        # 支持频道消息和普通消息
+        if update.channel_post:
+            await update.channel_post.reply_text(
+                response,
+                parse_mode='Markdown'
+            )
+        else:
+            await update.message.reply_text(
+                response,
+                parse_mode='Markdown'
+            )
+        
+        # 同时在日志中记录
+        from logger import get_logger
+        logger = get_logger('bot')
+        logger.info(f"📍 /chatid 命令 - Chat ID: {chat_id}, 类型: {chat_type}, 标题: {chat_title}")
+        
+    except Exception as e:
+        # 错误处理
+        error_msg = f"❌ 获取频道信息时出错: {str(e)}"
+        
+        try:
+            if update.channel_post:
+                await update.channel_post.reply_text(error_msg)
+            else:
+                await update.message.reply_text(error_msg)
+        except:
+            pass
+        
+        from logger import get_logger
+        logger = get_logger('bot')
+        logger.error(f"❌ /chatid 命令执行失败: {e}")
 
 
 def refresh_channels_from_file() -> Tuple[str, ...]:

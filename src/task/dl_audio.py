@@ -341,7 +341,7 @@ def dl_audio_latest(channel_name, audio_folder=None, group_name=None):
         "playlistend": 6,
         "match_filter": combined_filter,
         "keepvideo": False,
-        "outtmpl": os.path.join(target_folder, "%(id)s.%(title)s.%(ext)s"),  # 文件名格式：{video_id}.{title}.m4a
+        "outtmpl": os.path.join(target_folder, "%(uploader)s.%(id)s.%(title)s.%(ext)s"),  # 文件名格式：{频道名}.{video_id}.{title}.m4a
     }
     
     ydl_opts = get_ydl_opts(custom_opts)
@@ -439,12 +439,15 @@ def dl_audio_latest(channel_name, audio_folder=None, group_name=None):
                     upload_date=upload_date_str
                 )
                 
-                # 构建文件名：{video_id}.{title}.m4a
+                # 构建文件名：{频道名}.{video_id}.{title}.m4a
+                uploader = video_info.get('uploader') or video_info.get('channel') or channel_name or 'UnknownChannel'
+                safe_uploader = sanitize_filename(uploader)
+                
                 fulltitle = video_info.get('fulltitle') or video_info.get('title') or 'UnknownTitle'
                 safe_title = sanitize_filename(fulltitle)
                 
                 expected_audio_ext = ".m4a"
-                final_audio_filename_stem = f"{video_id}.{safe_title}"
+                final_audio_filename_stem = f"{safe_uploader}.{video_id}.{safe_title}"
                 
                 # 临时文件格式：filename.tmp.m4a (yt-dlp下载为filename.tmp，FFmpeg转换为filename.tmp.m4a)
                 temp_audio_path_without_ext = os.path.join(target_folder, final_audio_filename_stem)
@@ -849,11 +852,14 @@ def dl_audio_closest_after(au_folder, channel_name, target_timestamp=None):
                 title=closest_video.get('title', '未知标题')
             )
 
-            # 构建文件名：{video_id}.{title}.m4a
+            # 构建文件名：{频道名}.{video_id}.{title}.m4a
+            uploader = closest_video.get('uploader') or closest_video.get('channel') or channel_name or 'UnknownChannel'
+            safe_uploader = sanitize_filename(uploader)
+            
             fulltitle = closest_video.get('fulltitle') or closest_video.get('title') or 'UnknownTitle'
             safe_title = sanitize_filename(fulltitle)
             expected_audio_ext = ".m4a"
-            final_audio_filename_stem = f"{video_id_history}.{safe_title}"
+            final_audio_filename_stem = f"{safe_uploader}.{video_id_history}.{safe_title}"
 
             # 临时文件格式：filename.tmp.m4a (yt-dlp下载为filename.tmp，FFmpeg转换为filename.tmp.m4a)
             temp_audio_path_without_ext = os.path.join(au_folder, final_audio_filename_stem)

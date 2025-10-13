@@ -9,5 +9,6 @@
   // 针对所有 .log 文件的配置
   "files.associations": {
     "*.log": "log"
-  }
+  },
+  "python.terminal.activateEnvironment": false
 }

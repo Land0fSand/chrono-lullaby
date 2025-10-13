@@ -23,7 +23,7 @@ ChronoLullaby 是一个自动化服务，能够定时从指定的 YouTube 频道
 ### 3. 频道管理与交互
 
 - 支持通过 Telegram 机器人命令 `/addchannel` 动态添加新的 YouTube 频道，无需手动编辑文件。
-- 提供辅助命令获取 chat_id，便于配置目标群组。
+- 提供 `/chatid` 命令直接获取频道 chat_id，便于配置目标群组（无需停止主进程）。
 
 ---
 
@@ -78,7 +78,7 @@ python src/main.py
 ## 常见问题
 
 - **如何获取 chat_id？**  
-  可在 `util.py` 中启用 `show_chat_id`，让机器人监听消息并打印 chat_id。
+  在任何频道（包括私有频道）中向机器人发送 `/chatid` 命令，即可获得该频道的 Chat ID，无需停止主进程。详见 [/chatid 命令使用说明](docs/CHATID_COMMAND.md)。
 - **推送超时怎么办？**  
   已内置超时容错，绝大多数情况下不会影响音频推送。
 

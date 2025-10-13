@@ -10,7 +10,7 @@ if sys.stdout.encoding != 'utf-8':
 if sys.stderr.encoding != 'utf-8':
     sys.stderr.reconfigure(encoding='utf-8')
 
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from telegram.request import HTTPXRequest
 from telegram.error import NetworkError, TimedOut
 from dotenv import load_dotenv
@@ -23,7 +23,7 @@ from config import (
     get_telegram_chat_id,
     get_send_interval,
 )
-from util import get_channel_groups_with_details
+from util import get_channel_groups_with_details, show_chat_id
 from logger import get_logger
 
 # 使用统一的日志系统
@@ -77,6 +77,50 @@ async def send_file_task(context: ContextTypes.DEFAULT_TYPE) -> None:
         await send_file(context=context, chat_id=CHAT_ID, audio_folder=AUDIO_FOLDER)
     except Exception as e:
         logger.error(f"发送文件任务错误: {e}")
+
+async def test_command(update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """测试命令 - 用于验证 Bot 是否能在频道中接收消息"""
+    try:
+        chat = update.effective_chat
+        chat_id = chat.id
+        chat_type = chat.type
+        chat_title = chat.title if chat.title else "未命名"
+        
+        message = f"✅ Bot 正常工作！\n\n"
+        message += f"收到来自 {chat_type} 的消息\n"
+        message += f"Chat ID: {chat_id}\n"
+        message += f"标题: {chat_title}"
+        
+        # 支持频道消息和普通消息
+        if update.channel_post:
+            await update.channel_post.reply_text(message)
+        else:
+            await update.message.reply_text(message)
+        
+        logger.info(f"🧪 /test 命令 - Chat ID: {chat_id}, 类型: {chat_type}, 标题: {chat_title}")
+    except Exception as e:
+        logger.error(f"❌ /test 命令执行失败: {e}")
+
+async def echo_handler(update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """消息回显处理器 - 用于测试 Bot 是否能接收普通消息"""
+    try:
+        chat = update.effective_chat
+        
+        # 支持频道消息和普通消息
+        if update.channel_post:
+            message_obj = update.channel_post
+            message_text = message_obj.text if message_obj.text else "[非文本消息]"
+        else:
+            message_obj = update.message
+            message_text = message_obj.text if message_obj else "[无消息内容]"
+        
+        logger.info(f"📨 收到消息: '{message_text}' 来自 {chat.type} (ID: {chat.id})")
+        
+        # 只在包含"测试"时回复，避免干扰正常使用
+        if message_text and "测试" in message_text.lower():
+            await message_obj.reply_text(f"✅ 收到你的消息: {message_text}")
+    except Exception as e:
+        logger.error(f"❌ 消息处理失败: {e}")
 
 async def error_callback(update, context):
     """全局错误处理器"""
@@ -144,7 +188,36 @@ def main():
         )
     
     logger.info(f"✅ 所有发送任务已配置完成")
+    
+    # 注册命令处理器（私聊/群组）
     application.add_handler(CommandHandler("addchannel", add_channel))
+    application.add_handler(CommandHandler("chatid", show_chat_id))
+    application.add_handler(CommandHandler("test", test_command))
+    
+    # 注册频道命令处理器（频道消息需要单独处理）
+    application.add_handler(MessageHandler(
+        filters.UpdateType.CHANNEL_POST & filters.Regex(r'^/addchannel'), 
+        add_channel
+    ))
+    application.add_handler(MessageHandler(
+        filters.UpdateType.CHANNEL_POST & filters.Regex(r'^/chatid'), 
+        show_chat_id
+    ))
+    application.add_handler(MessageHandler(
+        filters.UpdateType.CHANNEL_POST & filters.Regex(r'^/test'), 
+        test_command
+    ))
+    
+    # 注册消息处理器（用于调试，记录所有收到的文本消息，但排除命令）
+    # 注意：这个要放在最后，优先级最低
+    application.add_handler(MessageHandler(
+        (filters.TEXT & ~filters.COMMAND) | 
+        (filters.UpdateType.CHANNEL_POST & filters.TEXT & ~filters.Regex(r'^/')),
+        echo_handler
+    ))
+    
+    logger.info("✅ 已注册命令: /addchannel, /chatid, /test（支持私聊/群组/频道）")
+    logger.info("✅ 已注册消息处理器（调试模式）")
     
     # 添加重试机制的轮询
     max_retries = 5

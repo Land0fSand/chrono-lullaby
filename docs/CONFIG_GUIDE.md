@@ -152,14 +152,31 @@ channel_groups:
 
 ## 获取 Telegram Chat ID
 
-### 方法 1：使用 @userinfobot
+### 方法 1：使用 /chatid 命令（推荐）⭐
+
+**这是最简单、最直接的方法！**
+
+1. 确保你的 Bot 已启动（运行 `ch start`）
+2. 将你的 Bot 添加到目标频道（包括私有频道）
+3. 在频道中发送命令：`/chatid`
+4. Bot 会立即回复包含该频道 Chat ID 的消息
+
+**优点：**
+- ✅ 无需停止主进程
+- ✅ 支持私有频道
+- ✅ 直接显示完整信息（Chat ID、类型、标题）
+- ✅ 方便快捷
+
+详细说明请参考：[/chatid 命令使用说明](CHATID_COMMAND.md)
+
+### 方法 2：使用 @userinfobot
 
 1. 在 Telegram 中搜索 `@userinfobot`
 2. 将 bot 添加到你的频道
 3. 在频道发送任何消息
 4. Bot 会回复包含 Chat ID 的信息
 
-### 方法 2：使用 Telegram API
+### 方法 3：使用 Telegram API
 
 访问以下 URL（替换 `YOUR_BOT_TOKEN`）：
 

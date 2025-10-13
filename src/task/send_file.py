@@ -23,38 +23,45 @@ logger = get_logger('bot.send_file')
 
 def extract_video_info_from_filename(filename: str) -> tuple:
     """
-    从文件名中提取视频ID和标题
+    从文件名中提取频道名、视频ID和标题
     
-    文件名格式: {video_id}.{title}.m4a 或 {video_id}.{title}_1.m4a (分段文件)
+    文件名格式: {频道名}.{video_id}.{title}.m4a 或 {频道名}.{video_id}.{title}_1.m4a (分段文件)
     
     Args:
         filename: 文件名
     
     Returns:
-        (video_id, title) 元组
+        (channel_name, video_id, title) 元组
     """
     base_name = os.path.splitext(filename)[0]  # 去掉扩展名
     
-    # 处理分段文件（例如：video_id.title_1）
+    # 处理分段文件（例如：channel.videoid.title_1）
     if '_' in base_name:
         parts = base_name.split('_')
         if parts[-1].isdigit():
             base_name = '_'.join(parts[:-1])
     
-    # 分割 video_id 和 title
-    parts = base_name.split('.', 1)
-    if len(parts) == 2:
-        video_id = parts[0]
+    # 分割频道名、video_id 和 title
+    parts = base_name.split('.', 2)  # 最多分3部分
+    if len(parts) >= 3:
+        channel_name = parts[0]
+        video_id = parts[1]
+        title = parts[2]
+    elif len(parts) == 2:
+        # 向后兼容旧格式（只有频道名.标题 或 video_id.标题）
+        channel_name = parts[0]
+        video_id = parts[0]  # 如果是旧格式，用频道名作为ID
         title = parts[1]
     else:
-        # 如果格式不符合预期，使用整个文件名作为标题
+        # 如果格式不符合预期，使用整个文件名
+        channel_name = base_name
         video_id = base_name
         title = base_name
     
-    return video_id, title
+    return channel_name, video_id, title
 
 
-def record_sent_file(chat_id: str, video_id: str, title: str) -> None:
+def record_sent_file(chat_id: str, video_id: str, title: str, channel_name: str = None) -> None:
     """
     记录已发送的文件到两个archive文件
     
@@ -62,6 +69,7 @@ def record_sent_file(chat_id: str, video_id: str, title: str) -> None:
         chat_id: Telegram 频道 ID
         video_id: YouTube 视频 ID
         title: 视频标题
+        channel_name: YouTube 频道名（可选）
     """
     try:
         # 1. 记录机器格式（yt-dlp 格式）
@@ -78,9 +86,12 @@ def record_sent_file(chat_id: str, video_id: str, title: str) -> None:
         with open(machine_archive, 'a', encoding='utf-8') as f:
             f.write(machine_line)
         
-        # 2. 记录人类可读格式
+        # 2. 记录人类可读格式（包含频道名）
         readable_archive = get_sent_archive_path(chat_id, readable=True)
-        readable_line = f"{video_id} [{title}]\n"
+        if channel_name:
+            readable_line = f"{video_id} [{channel_name}] {title}\n"
+        else:
+            readable_line = f"{video_id} [{title}]\n"
         
         with open(readable_archive, 'a', encoding='utf-8') as f:
             f.write(readable_line)
@@ -89,6 +100,7 @@ def record_sent_file(chat_id: str, video_id: str, title: str) -> None:
             logger, logging.DEBUG,
             "已记录发送记录",
             video_id=video_id,
+            channel_name=channel_name,
             chat_id=chat_id
         )
         
@@ -348,29 +360,23 @@ async def send_single_file(context: ContextTypes.DEFAULT_TYPE, chat_id, file_pat
         )
         
         file_name_for_meta = os.path.basename(file_path)
-        base_for_meta, ext_for_meta = os.path.splitext(file_name_for_meta)
         
-        parts = base_for_meta.split('.')
-        performer = "Unknown"
-        title = base_for_meta # Default title to base filename if parsing fails
-
-        if len(parts) >= 2:
-            performer = parts[0]
-            # Join all parts after the first as the title, then remove trailing _segmentNumber
-            title_candidate = ".".join(parts[1:])
-            title_parts = title_candidate.split('_')
-            if len(title_parts) > 1 and title_parts[-1].isdigit():
-                title = "_".join(title_parts[:-1]) + f" (Part {int(title_parts[-1]) + 1})" # Make it 1-indexed for display
+        # 从文件名中提取频道名、视频ID和标题
+        channel_name, video_id, base_title = extract_video_info_from_filename(file_name_for_meta)
+        
+        # 处理分段文件的标题显示
+        base_name = os.path.splitext(file_name_for_meta)[0]
+        if '_' in base_name:
+            parts = base_name.split('_')
+            if parts[-1].isdigit():
+                title = f"{base_title} (Part {int(parts[-1]) + 1})"  # 1-indexed for display
             else:
-                title = title_candidate
-        elif len(parts) == 1: # Only one part, likely the title itself, performer unknown
-            title_candidate = parts[0]
-            title_parts = title_candidate.split('_')
-            if len(title_parts) > 1 and title_parts[-1].isdigit():
-                title = "_".join(title_parts[:-1]) + f" (Part {int(title_parts[-1]) + 1})" # Make it 1-indexed for display
-            else:
-                title = title_candidate
-
+                title = base_title
+        else:
+            title = base_title
+        
+        # 使用频道名作为 performer
+        performer = channel_name if channel_name else "Unknown"
 
         with open(file_path, 'rb') as file_to_send:
             with suppress(TimedOut):
@@ -382,9 +388,8 @@ async def send_single_file(context: ContextTypes.DEFAULT_TYPE, chat_id, file_pat
                     # Consider adding duration if easily obtainable from ffmpeg.probe and passing it
                 )
         
-        # 记录已发送的文件
-        video_id, video_title = extract_video_info_from_filename(os.path.basename(file_path))
-        record_sent_file(chat_id, video_id, video_title)
+        # 记录已发送的文件（包含频道名）
+        record_sent_file(chat_id, video_id, base_title, channel_name)
         
         log_with_context(
             logger, logging.INFO,

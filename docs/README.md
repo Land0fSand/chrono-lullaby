@@ -199,8 +199,10 @@ UCxxxxxxxxxxxxxxxxxxxxx
 
 ### 支持的命令
 
-- `/add <频道URL>` - 添加新频道
-- 其他命令（根据 `telegram_bot.py` 实现）
+- `/chatid` - 获取当前频道的 Chat ID（用于配置新频道）
+- `/addchannel <频道URL>` - 添加新频道到监控列表
+
+详细使用说明请参考：[/chatid 命令使用说明](CHATID_COMMAND.md)
 
 ### 文件发送
 
