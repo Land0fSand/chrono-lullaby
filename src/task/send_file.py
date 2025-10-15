@@ -233,7 +233,10 @@ def _recursive_split_and_check(file_path, original_file_size_mb, num_parts_to_tr
 
     output_segments = []
     base_name, ext = os.path.splitext(file_path)
-    segment_pattern = f"{base_name}_%d{ext}" # ffmpeg default is 0-indexed
+    # FFmpeg's segment muxer uses % as format character, need to escape it
+    # Replace % with %% to escape it for FFmpeg
+    safe_base_name = base_name.replace('%', '%%')
+    segment_pattern = f"{safe_base_name}_%d{ext}" # ffmpeg default is 0-indexed
 
     try:
         probe = ffmpeg.probe(file_path)
@@ -267,6 +270,7 @@ def _recursive_split_and_check(file_path, original_file_size_mb, num_parts_to_tr
         ).run(quiet=True, overwrite_output=True)
 
         # Validate segments
+        # Note: FFmpeg creates files using the original base_name (not safe_base_name with %%)
         all_segments_ok = True
         max_segment_size_mb = 0
         for i in range(num_parts_to_try):
@@ -320,7 +324,7 @@ def _recursive_split_and_check(file_path, original_file_size_mb, num_parts_to_tr
             num_parts=num_parts_to_try,
             error=e.stderr.decode('utf8', errors='ignore') if e.stderr else 'N/A'
         )
-        # Cleanup on ffmpeg error
+        # Cleanup on ffmpeg error (use original base_name for cleanup)
         for i in range(num_parts_to_try + 2):
             segment_name = f"{base_name}_{i}{ext}"
             if os.path.exists(segment_name):
@@ -335,6 +339,7 @@ def _recursive_split_and_check(file_path, original_file_size_mb, num_parts_to_tr
             error=str(e),
             error_type=type(e).__name__
         )
+        # Cleanup on exception (use original base_name for cleanup)
         for i in range(num_parts_to_try + 2):
             segment_name = f"{base_name}_{i}{ext}"
             if os.path.exists(segment_name):
