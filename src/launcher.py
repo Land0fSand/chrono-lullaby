@@ -21,6 +21,7 @@ import multiprocessing
 import logging
 from pathlib import Path
 from logger import get_logger, log_with_context
+import config
 
 # 使用统一的日志系统
 logger = get_logger('launcher', level=logging.INFO)
@@ -171,6 +172,34 @@ class ProcessManager:
 def main():
     # 确保在正确的目录中
     os.chdir(Path(__file__).parent)
+    
+    # 初始化配置提供者（检查环境变量中的模式覆盖）
+    mode_override = os.environ.get('CONFIG_MODE')
+    if mode_override:
+        logger.info(f"使用命令行指定的配置模式: {mode_override}")
+    
+    try:
+        config.init_config_provider(mode_override=mode_override)
+    except Exception as e:
+        logger.error(f"初始化配置提供者失败: {e}")
+        logger.warning("将使用默认本地配置模式")
+    
+    # 如果是 Notion 模式，启动同步服务
+    provider = config.get_config_provider()
+    if provider.__class__.__name__ == 'NotionConfigProvider':
+        try:
+            from notion_sync import init_sync_service
+            yaml_config = config.load_yaml_config()
+            sync_config = {}
+            if yaml_config:
+                notion_block = yaml_config.get('notion') or yaml_config.get('config_source', {}).get('notion', {})
+                if isinstance(notion_block, dict):
+                    sync_config = notion_block.get('sync', {})
+            if sync_config:
+                init_sync_service(provider, sync_config)
+                logger.info("Notion 同步服务已启动")
+        except Exception as e:
+            logger.warning(f"启动 Notion 同步服务失败: {e}")
     
     # 创建并启动进程管理器
     manager = ProcessManager()

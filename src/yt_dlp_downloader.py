@@ -14,7 +14,7 @@ from dotenv import load_dotenv
 from task.dl_audio import dl_audio_latest
 from util import refresh_channels_from_file, get_channel_groups_with_details
 from config import ENV_FILE, get_download_interval, get_channel_delay_min, get_channel_delay_max
-from logger import get_logger, log_with_context
+from logger import get_logger, log_with_context, TRACE_LEVEL
 import logging
 
 # 使用统一的日志系统

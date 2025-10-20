@@ -16,6 +16,11 @@ from dotenv import load_dotenv
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # ============================================================
+# 配置提供者管理
+# ============================================================
+_config_provider = None  # 全局配置提供者实例
+
+# ============================================================
 # 配置文件路径
 # ============================================================
 CONFIG_YAML_FILE = os.path.join(PROJECT_ROOT, "config", "config.yaml")
@@ -23,6 +28,78 @@ CHANNELS_FILE = os.path.join(PROJECT_ROOT, "config", "channels.txt")
 ENV_FILE = os.path.join(PROJECT_ROOT, ".env")
 DEBUG_INFO = os.path.join(PROJECT_ROOT, "debug_closest_video.json")
 STORY_FILE = os.path.join(PROJECT_ROOT, "story.txt")
+
+# ============================================================
+# 配置源初始化
+# ============================================================
+
+def init_config_provider(mode_override: Optional[str] = None):
+    """
+    初始化配置提供者
+    
+    Args:
+        mode_override: 覆盖配置文件中的模式（'local' 或 'notion'）
+    """
+    global _config_provider
+    
+    # 加载基础配置
+    config = load_yaml_config()
+    if config is None:
+        # 回退到本地模式
+        from config_provider import LocalConfigProvider
+        _config_provider = LocalConfigProvider(PROJECT_ROOT, CONFIG_YAML_FILE)
+        return
+    
+    # 确定配置模式
+    legacy_source = config.get('config_source', {})
+    mode = mode_override or config.get('mode') or legacy_source.get('mode', 'local')
+
+    if mode == 'notion':
+        # Notion 模式
+        try:
+            from notion_adapter import NotionAdapter
+            from config_provider import NotionConfigProvider
+            
+            notion_config = config.get('notion', {})
+            if not notion_config:
+                notion_config = legacy_source.get('notion', {})
+            api_key = notion_config.get('api_key')
+            
+            if not api_key or api_key == 'secret_xxxxx':
+                print("错误：Notion API Key 未配置，降级到本地模式")
+                from config_provider import LocalConfigProvider
+                _config_provider = LocalConfigProvider(PROJECT_ROOT, CONFIG_YAML_FILE)
+                return
+            
+            # 创建 Notion 适配器
+            adapter = NotionAdapter(api_key)
+            _config_provider = NotionConfigProvider(adapter, notion_config)
+            print("✅ 使用 Notion 远程配置模式")
+            
+        except Exception as e:
+            print(f"错误：初始化 Notion 配置提供者失败: {e}")
+            print("降级到本地模式")
+            from config_provider import LocalConfigProvider
+            _config_provider = LocalConfigProvider(PROJECT_ROOT, CONFIG_YAML_FILE)
+    else:
+        # 本地模式
+        from config_provider import LocalConfigProvider
+        _config_provider = LocalConfigProvider(PROJECT_ROOT, CONFIG_YAML_FILE)
+        print("✅ 使用本地配置模式")
+
+
+def get_config_provider():
+    """
+    获取配置提供者实例
+    
+    Returns:
+        配置提供者实例
+    """
+    global _config_provider
+    if _config_provider is None:
+        init_config_provider()
+    return _config_provider
+
 
 # ============================================================
 # YAML 配置加载
@@ -153,20 +230,8 @@ def get_telegram_token(group_index: int = 0) -> Optional[str]:
     Returns:
         Bot Token，优先级：频道组配置 > 全局配置 > 环境变量
     """
-    # 1. 尝试从指定频道组读取独立的 bot_token
-    channel_groups = get_config_value('channel_groups', [])
-    if channel_groups and group_index < len(channel_groups):
-        group_token = channel_groups[group_index].get('bot_token')
-        if group_token and group_token != "YOUR_BOT_TOKEN_HERE" and group_token.strip():
-            return group_token
-    
-    # 2. 使用全局 telegram.bot_token
-    global_token = get_config_value('telegram.bot_token')
-    if global_token and global_token != "YOUR_BOT_TOKEN_HERE":
-        return global_token
-    
-    # 3. 回退到环境变量
-    return os.environ.get("BOT_TOKEN")
+    provider = get_config_provider()
+    return provider.get_telegram_token(group_index)
 
 def get_telegram_chat_id() -> Optional[str]:
     """获取 Telegram Chat ID"""
@@ -181,35 +246,43 @@ def get_telegram_chat_id() -> Optional[str]:
 
 def get_send_interval() -> int:
     """获取发送间隔（秒）"""
-    return get_config_value('telegram.send_interval', 4920)
+    provider = get_config_provider()
+    return provider.get_send_interval()
 
 def get_download_interval() -> int:
     """获取下载间隔（秒）"""
-    return get_config_value('downloader.download_interval', 29520)
+    provider = get_config_provider()
+    return provider.get_download_interval()
 
 def get_filter_days() -> int:
     """获取视频过滤天数（支持热重载）"""
-    return get_config_value('downloader.filter_days', 3, reload=True)
+    provider = get_config_provider()
+    return provider.get_filter_days()
 
 def get_max_videos_per_channel() -> int:
     """获取每个频道检查的最大视频数（支持热重载）"""
-    return get_config_value('downloader.max_videos_per_channel', 6, reload=True)
+    provider = get_config_provider()
+    return provider.get_max_videos_per_channel()
 
 def get_channel_delay_min() -> int:
     """获取频道间最小延迟（秒）"""
-    return get_config_value('downloader.channel_delay_min', 0)
+    provider = get_config_provider()
+    return provider.get_channel_delay_min()
 
 def get_channel_delay_max() -> int:
     """获取频道间最大延迟（秒）"""
-    return get_config_value('downloader.channel_delay_max', 0)
+    provider = get_config_provider()
+    return provider.get_channel_delay_max()
 
 def get_video_delay_min() -> int:
     """获取视频间最小延迟（秒）"""
-    return get_config_value('downloader.video_delay_min', 120)
+    provider = get_config_provider()
+    return provider.get_video_delay_min()
 
 def get_video_delay_max() -> int:
     """获取视频间最大延迟（秒）"""
-    return get_config_value('downloader.video_delay_max', 240)
+    provider = get_config_provider()
+    return provider.get_video_delay_max()
 
 def get_all_channel_groups(use_cache: bool = True) -> List[Dict[str, Any]]:
     """
@@ -221,20 +294,8 @@ def get_all_channel_groups(use_cache: bool = True) -> List[Dict[str, Any]]:
     Returns:
         频道组列表
     """
-    if not use_cache:
-        # 强制重新读取 YAML 文件（仅读取频道组配置）
-        if not os.path.exists(CONFIG_YAML_FILE):
-            return []
-        
-        try:
-            with open(CONFIG_YAML_FILE, 'r', encoding='utf-8') as f:
-                config = yaml.safe_load(f)
-                return config.get('channel_groups', []) if config else []
-        except Exception as e:
-            print(f"警告：重新加载频道组配置失败: {e}")
-            return []
-    
-    return get_config_value('channel_groups', [])
+    provider = get_config_provider()
+    return provider.get_channel_groups(use_cache=use_cache)
 
 # ============================================================
 # 初始化

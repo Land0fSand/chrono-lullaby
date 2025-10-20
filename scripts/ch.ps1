@@ -9,6 +9,7 @@
 
 param(
     [string]$Command,
+    [string]$Mode = "",  # 配置模式：local 或 notion
     [string[]]$Arguments = @()
 )
 
@@ -25,6 +26,8 @@ function Show-Help {
     Write-Host "  status                   查看服务状态" -ForegroundColor White
     Write-Host "  logs     [类型] [选项]   查看日志" -ForegroundColor White
     Write-Host "  cleanup                  强制清理所有进程" -ForegroundColor White
+    Write-Host "  init-notion              初始化 Notion 数据库结构" -ForegroundColor White
+    Write-Host "  sync-to-notion [--data <范围>]  手动同步数据到 Notion" -ForegroundColor White
     Write-Host "  add-chtopath             永久添加到系统 PATH" -ForegroundColor White
     Write-Host "  help                     显示此帮助信息" -ForegroundColor White
     Write-Host ""
@@ -45,12 +48,15 @@ function Show-Help {
     Write-Host ""
     Write-Host "示例:" -ForegroundColor Yellow
     Write-Host "  ch start                 # 启动服务" -ForegroundColor Gray
+    Write-Host "  ch start --mode notion   # 使用 Notion 模式启动" -ForegroundColor Gray
     Write-Host "  ch stop                  # 停止服务" -ForegroundColor Gray
     Write-Host "  ch restart               # 重启服务" -ForegroundColor Gray
     Write-Host "  ch status                # 查看状态" -ForegroundColor Gray
     Write-Host "  ch logs                  # 查看所有日志" -ForegroundColor Gray
     Write-Host "  ch logs downloader -f    # 实时查看下载器日志" -ForegroundColor Gray
     Write-Host "  ch logs --list           # 列出所有日志文件" -ForegroundColor Gray
+    Write-Host "  ch init-notion           # 初始化 Notion 数据库" -ForegroundColor Gray
+    Write-Host "  ch sync-to-notion --data config   # 同步配置到 Notion（支持 all/archive/logs）" -ForegroundColor Gray
     Write-Host "  ch cleanup               # 强制清理" -ForegroundColor Gray
     Write-Host "  ch add-chtopath          # 永久添加到系统 PATH" -ForegroundColor Gray
 }
@@ -156,6 +162,12 @@ if (-not $Command) {
 # 启动命令实现
 function Invoke-StartCommand {
     Write-Host "=== ChronoLullaby 服务启动 ===" -ForegroundColor Green
+    
+    # 设置配置模式环境变量
+    if ($Mode) {
+        $env:CONFIG_MODE = $Mode
+        Write-Host "配置模式: $Mode" -ForegroundColor Cyan
+    }
 
     # 检查是否已有实例在运行
     $processInfoPath = Join-Path $projectRoot "data/process_info.json"
@@ -662,6 +674,129 @@ function Invoke-LogsCommand {
     }
 }
 
+# init-notion 命令实现
+function Invoke-InitNotionCommand {
+    Write-Host "=== ChronoLullaby Notion 初始化 ===" -ForegroundColor Green
+    Write-Host ""
+    
+    # 进入源代码目录
+    Push-Location src
+    
+    try {
+        Write-Host "🚀 正在启动 Notion 初始化工具..." -ForegroundColor Cyan
+        Write-Host ""
+        
+        if ($useVenv) {
+            $pythonExe = Join-Path $projectRoot ".venv\Scripts\python.exe"
+            & $pythonExe "commands\init_notion.py"
+        }
+        else {
+            poetry run python "commands\init_notion.py"
+        }
+        
+        $exitCode = $LASTEXITCODE
+        
+        Write-Host ""
+        if ($exitCode -eq 0) {
+            Write-Host "✅ Notion 初始化成功完成！" -ForegroundColor Green
+        }
+        else {
+            Write-Host "❌ Notion 初始化失败，请检查错误信息" -ForegroundColor Red
+        }
+    }
+    catch {
+        Write-Host "❌ 执行 Notion 初始化时发生错误: $($_.Exception.Message)" -ForegroundColor Red
+    }
+    finally {
+        Pop-Location
+    }
+}
+
+# sync-to-notion 命令实现
+function Invoke-SyncToNotionCommand {
+    Write-Host "=== ChronoLullaby 数据同步到 Notion ===" -ForegroundColor Green
+    Write-Host ""
+    
+    # 进入源代码目录
+    Push-Location src
+    
+    try {
+        Write-Host "🚀 正在启动数据同步工具..." -ForegroundColor Cyan
+        Write-Host ""
+        
+        # 构建参数
+        $syncArgs = @("commands\sync_to_notion.py")
+        $rawArgs = @()
+        if ($Mode) {
+            $rawArgs += $Mode
+        }
+        if ($Arguments.Count -gt 0) {
+            $rawArgs += $Arguments
+        }
+
+        if ($rawArgs.Count -gt 0) {
+            $validDataValues = @("all", "config", "archive", "logs")
+            $index = 0
+            while ($index -lt $rawArgs.Count) {
+                $token = $rawArgs[$index]
+
+                if ($token -match '^--data=(.+)$') {
+                    $syncArgs += "--data"
+                    $syncArgs += $Matches[1]
+                    $index++
+                    continue
+                }
+
+                if ($token -eq "--data" -or $token -eq "-data") {
+                    $syncArgs += "--data"
+                    if ($index + 1 -lt $rawArgs.Count) {
+                        $syncArgs += $rawArgs[$index + 1]
+                        $index += 2
+                    }
+                    else {
+                        $index++
+                    }
+                    continue
+                }
+
+                if ($validDataValues -contains $token.ToLowerInvariant()) {
+                    $syncArgs += "--data"
+                    $syncArgs += $token
+                    $index++
+                    continue
+                }
+
+                $syncArgs += $token
+                $index++
+            }
+        }
+        
+        if ($useVenv) {
+            $pythonExe = Join-Path $projectRoot ".venv\Scripts\python.exe"
+            & $pythonExe $syncArgs
+        }
+        else {
+            poetry run python $syncArgs
+        }
+        
+        $exitCode = $LASTEXITCODE
+        
+        Write-Host ""
+        if ($exitCode -eq 0) {
+            Write-Host "✅ 数据同步成功完成！" -ForegroundColor Green
+        }
+        else {
+            Write-Host "❌ 数据同步失败，请检查错误信息" -ForegroundColor Red
+        }
+    }
+    catch {
+        Write-Host "❌ 执行数据同步时发生错误: $($_.Exception.Message)" -ForegroundColor Red
+    }
+    finally {
+        Pop-Location
+    }
+}
+
 # 清理命令实现
 function Invoke-CleanupCommand {
     Write-Host "=== ChronoLullaby 超级强制清理 ===" -ForegroundColor Green
@@ -934,6 +1069,12 @@ switch ($Command.ToLower()) {
     "cleanup" {
         Invoke-CleanupCommand
     }
+    "init-notion" {
+        Invoke-InitNotionCommand
+    }
+    "sync-to-notion" {
+        Invoke-SyncToNotionCommand
+    }
     "add-chtopath" {
         Add-ChToPath
     }
@@ -1021,4 +1162,3 @@ function Add-ChToPath {
         Write-Host "  $scriptDir" -ForegroundColor Cyan
     }
 }
-

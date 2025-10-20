@@ -4,11 +4,18 @@
 
 ChronoLullaby 使用 `config/config.yaml` 进行配置。
 
+> 提示：新项目可根据需求选择模板：`config/config.notion.example.yaml`（Notion 模式最简配置）或 `config/config.local.example.yaml`（本地模式示例配置）。复制后再进行修改。
+
 ---
 
 ## 完整配置示例
 
 ```yaml
+mode: local
+
+log:
+  level: INFO
+
 # Telegram Bot 配置
 telegram:
   bot_token: "1234567890:ABCdefGHIjklMNOpqrsTUVwxyz"
@@ -16,25 +23,24 @@ telegram:
 
 # YouTube 下载器配置
 downloader:
-  download_interval: 29520  # 下载间隔（秒），默认约8小时
+  download_interval: 29520  # 下载轮次间隔（秒），默认约8小时
   cookies_file: "youtube.cookies"  # Cookies文件路径
-  download_archive: "download_archive.txt"  # 已下载记录
+  download_archive: "download_archive.txt"  # 下载记录
   filter_days: 3  # 只下载最近N天的视频
-  max_videos_per_channel: 6  # 每频道检查的最大视频数
+  max_videos_per_channel: 6  # 每频道最多下载视频数
 
 # 频道组配置
 channel_groups:
-  - name: "主频道"
-    description: "所有订阅的频道"  # 可选
+  - name: "示例频道"
+    description: "包含若干的频道"  # 可选
     telegram_chat_id: "-1001234567890"
     audio_folder: "au"  # 音频存储目录
     youtube_channels:
       - "@StorytellerFan"
       - "@meowsir"
-      - "@频道名"  # 支持中文
+      - "@频道3"  # 支持中文
       # - "@暂停的频道"  # 用#注释掉不需要的频道
 ```
-
 ---
 
 ## 配置项说明
@@ -55,6 +61,12 @@ channel_groups:
 | `download_archive` | ❌ | download_archive.txt | 已下载记录文件 |
 | `filter_days` | ❌ | 3 | 只下载最近N天的视频 |
 | `max_videos_per_channel` | ❌ | 6 | 每频道检查的最大视频数 |
+
+### 日志设置
+
+| 字段 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `log.level` | str | INFO | 全局日志级别（DEBUG / INFO / WARNING / ERROR） |
 
 ### 频道组配置
 
@@ -123,8 +135,9 @@ youtube_channels:
 
 | 文件 | 说明 |
 |------|------|
-| `config/config.yaml` | 主配置文件 |
-| `config/config.yaml.example` | 配置示例 |
+| `config/config.yaml` | 当前生效的配置文件 |
+| `config/config.notion.example.yaml` | Notion 模式最简模板 |
+| `config/config.local.example.yaml` | 本地模式示例模板 |
 | `config/youtube.cookies` | YouTube Cookies（可选，用于会员内容） |
 
 ---
@@ -134,7 +147,7 @@ youtube_channels:
 ### 1. 复制配置示例
 
 ```powershell
-copy config\config.yaml.example config\config.yaml
+copy config\config.local.example.yaml config\config.yaml
 ```
 
 ### 2. 编辑配置
@@ -204,3 +217,14 @@ A: 需要提供 YouTube Cookies：
 
 - [使用文档](README.md)
 - [/chatid 命令说明](CHATID_COMMAND.md)
+
+---
+
+## 同步到 Notion
+
+若已完成本地配置，想切换到 Notion 模式，可运行：
+```powershell
+ch sync-to-notion --data config
+```
+也可将 `config` 替换为 `all` / `archive` / `logs` 以同步其他数据。
+

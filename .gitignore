@@ -123,3 +123,5 @@ mypy.ini
 
 # logs and process info
 /logs/
+
+*.backup

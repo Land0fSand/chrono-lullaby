@@ -387,6 +387,21 @@ flake8 = ["flake8"]
 tests = ["psutil", "pytest (!=3.3.0)", "pytest-cov"]
 
 [[package]]
+name = "notion-client"
+version = "2.5.0"
+description = "Python client for the official Notion API"
+optional = false
+python-versions = "<4,>=3.7"
+groups = ["main"]
+files = [
+    {file = "notion_client-2.5.0-py2.py3-none-any.whl", hash = "sha256:d2efde1def1e7a3cc68cf4d2cab715571c71767852b26bf04474e9945d4a5903"},
+    {file = "notion_client-2.5.0.tar.gz", hash = "sha256:a03a0cc0502292193527af07a3bd13e40eb2b1083b60dcc7d733baad2d2729fd"},
+]
+
+[package.dependencies]
+httpx = ">=0.23.0"
+
+[[package]]
 name = "pycryptodomex"
 version = "3.23.0"
 description = "Cryptographic library for Python"
@@ -730,4 +745,4 @@ test = ["pytest (>=8.1,<9.0)", "pytest-rerunfailures (>=14.0,<15.0)"]
 [metadata]
 lock-version = "2.1"
 python-versions = "^3.9"
-content-hash = "b37dccd607bea269d4cabc58cb3149bbc65826dfd517afd90d46ecf62b293b3d"
+content-hash = "9dbf821be889f6e37808a5c3da0132da47ec5f79a99361bf73836fce14b39f86"

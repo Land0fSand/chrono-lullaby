@@ -92,6 +92,65 @@ class ConsoleFormatter(logging.Formatter):
         return log_line
 
 
+class NotionLogHandler(logging.Handler):
+    """
+    将日志转发到 Notion 同步服务
+    """
+    
+    def __init__(self, log_type: str, component_name: str):
+        super().__init__()
+        self.log_type = log_type
+        self.component_name = component_name
+        self._init_attempted = False
+    
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            from notion_sync import get_sync_service  # 延迟导入避免循环依赖
+            service = get_sync_service()
+            if service is None and not self._init_attempted:
+                self._attempt_init_service()
+                service = get_sync_service()
+        except ImportError:
+            return
+        
+        if service is None:
+            return
+        
+        try:
+            message = record.getMessage()
+            
+            extra_data = getattr(record, 'extra_data', None)
+            if extra_data:
+                context_str = ", ".join(f"{key}={value}" for key, value in extra_data.items())
+                message = f"{message} | {context_str}"
+            
+            service.queue_log(self.log_type, record.levelname.upper(), message)
+        except Exception:
+            self.handleError(record)
+    
+    def _attempt_init_service(self) -> None:
+        """在当前进程尝试初始化 Notion 同步服务"""
+        self._init_attempted = True
+        try:
+            import config
+            provider = config.get_config_provider()
+            if provider.__class__.__name__ != 'NotionConfigProvider':
+                return
+            
+            from notion_sync import init_sync_service
+            yaml_config = config.load_yaml_config()
+            notion_cfg = {}
+            if yaml_config:
+                notion_cfg = yaml_config.get('notion', {})
+                if not notion_cfg:
+                    notion_cfg = yaml_config.get('config_source', {}).get('notion', {})
+            sync_cfg = notion_cfg.get('sync', {}) if isinstance(notion_cfg, dict) else {}
+            init_sync_service(provider, sync_cfg)
+        except Exception:
+            # 避免在日志处理过程中抛出异常，静默失败
+            return
+
+
 class LoggerManager:
     """
     日志管理器，负责创建和配置各个组件的 logger
@@ -133,10 +192,58 @@ class LoggerManager:
             配置好的 logger 对象
         """
         logger = logging.getLogger(f"chronolullaby.{component}")
-        
-        # 避免重复添加 handler
+        target_level = _get_configured_log_level(level)
+        logger.setLevel(target_level)
+        logger.propagate = False
+
         if logger.handlers:
+            for handler in logger.handlers:
+                if handler.level not in (logging.ERROR, logging.NOTSET):
+                    handler.setLevel(target_level)
             return logger
+
+        # 控制台 Handler（人类可读格式）
+        if console:
+            console_handler = logging.StreamHandler(sys.stdout)
+            console_handler.setLevel(target_level)
+            console_handler.setFormatter(ConsoleFormatter())
+            logger.addHandler(console_handler)
+
+        # 文件 Handler（JSONL 格式）
+        if file:
+            # 主日志文件（所有级别）
+            log_file = self.log_dir / f"{component}.log"
+            file_handler = logging.handlers.RotatingFileHandler(
+                log_file,
+                maxBytes=10 * 1024 * 1024,  # 10 MB
+                backupCount=5,
+                encoding='utf-8'
+            )
+            file_handler.setLevel(target_level)
+            file_handler.setFormatter(JSONFormatter())
+            logger.addHandler(file_handler)
+
+            # 错误日志文件（仅 ERROR 及以上）
+            if separate_error_file:
+                error_file = self.log_dir / f"{component}_error.log"
+                error_handler = logging.handlers.RotatingFileHandler(
+                    error_file,
+                    maxBytes=10 * 1024 * 1024,  # 10 MB
+                    backupCount=5,
+                    encoding='utf-8'
+                )
+                error_handler.setLevel(logging.ERROR)
+                error_handler.setFormatter(JSONFormatter())
+                logger.addHandler(error_handler)
+
+        base_component = component.split('.')[0] if component else ''
+        notion_log_type = base_component if base_component in ('downloader', 'bot') else 'error'
+        notion_handler = NotionLogHandler(notion_log_type, component or base_component or 'unknown')
+        notion_handler.setLevel(logging.NOTSET)
+        logger.addHandler(notion_handler)
+
+        return logger
+
         
         logger.setLevel(level)
         logger.propagate = False
@@ -174,6 +281,12 @@ class LoggerManager:
                 error_handler.setLevel(logging.ERROR)
                 error_handler.setFormatter(JSONFormatter())
                 logger.addHandler(error_handler)
+        
+        base_component = component.split('.')[0] if component else ''
+        notion_log_type = base_component if base_component in ('downloader', 'bot') else 'error'
+        notion_handler = NotionLogHandler(notion_log_type, component or base_component or 'unknown')
+        notion_handler.setLevel(logging.NOTSET)
+        logger.addHandler(notion_handler)
         
         return logger
 
@@ -227,10 +340,10 @@ if __name__ == "__main__":
     print("=== 测试日志系统 ===\n")
     
     # 创建测试 logger
-    test_logger = get_logger("test", level=logging.DEBUG)
+    test_logger = get_logger("test", level=TRACE_LEVEL)
     
     # 测试各个级别
-    test_logger.debug("这是 DEBUG 消息")
+    test_logger.trace("这是 TRACE 消息")
     test_logger.info("这是 INFO 消息")
     test_logger.warning("这是 WARNING 消息")
     test_logger.error("这是 ERROR 消息")

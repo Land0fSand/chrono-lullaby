@@ -1,0 +1,40 @@
+# ChronoLullaby 配置示例（Notion 模式最简版）
+#
+# 使用步骤：
+# 1. 复制本文件为 config/config.yaml
+# 2. 填写下方的 Notion Integration API Key 与父页面 Page ID
+# 3. 运行 `ch init-notion` 初始化 Notion 所需的数据库与页面
+# 4. （可选）运行 `ch sync-to-notion --data config` 将本地配置与 Notion 保持一致
+#
+# 说明：
+# - 首次运行 `ch init-notion` 后，database_ids / page_ids 会自动写回此文件
+# - 全局设置（telegram/downloader）会被同步到 Notion 的 GlobalSettings 页面
+# - 频道配置建议直接在 Notion 的 Config Database 内维护
+
+mode: notion
+
+notion:
+  api_key: "secret_xxxxx"             # 在 https://www.notion.so/my-integrations 获取
+  page_id: "xxxxx"                    # 父页面 URL 中的 UUID（含连字符）
+
+  database_ids:                       # 运行 `ch init-notion` 后自动填充
+    config: ""
+    sent_archive: ""
+    download_archive: ""
+    logs: ""
+
+  page_ids:                           # 运行 `ch init-notion` 后自动填充
+    cookies: ""
+    global_settings: ""
+
+  sync:
+    log_upload_interval: 300          # 日志批量上传间隔（秒）
+    archive_sync_interval: 60         # 记录同步间隔（秒）
+    machine_id: "machine-1"           # 区分不同机器上传的日志
+
+log:
+  level: INFO                         # 控制控制台/文件/Notion 日志级别
+
+# 额外说明：
+# - 若想继续使用本地模式，请参考 config/config.local.example.yaml
+# - 本地模式需要在 YAML 中维护 telegram/downloader/频道组等完整信息

@@ -12,6 +12,7 @@
 - 📤 **自动推送** - 将音频推送到 Telegram 频道，支持大文件自动分割
 - 🔄 **去重机制** - 避免重复下载，自动跳过已处理的内容
 - 📊 **日志系统** - JSONL 格式日志，便于查询和分析
+- ☁️ **远程配置** - 支持 Notion 作为配置和数据存储，实现跨机器无缝切换
 - ⚙️ **简单管理** - 统一的 `ch` 命令管理所有功能
 
 ---
@@ -30,29 +31,25 @@ pip install -r requirements.txt
 
 ### 2. 配置
 
-复制配置示例：
-```powershell
-copy config\config.yaml.example config\config.yaml
-```
+根据使用场景选择并复制模板为 `config/config.yaml`：
 
-编辑 `config/config.yaml`：
-```yaml
-telegram:
-  bot_token: "你的BOT_TOKEN"  # 从 @BotFather 获取
+- **Notion 模式（推荐）**：
+  ```powershell
+  copy config\config.notion.example.yaml config\config.yaml
+  ```
+  填写 Notion Integration API Key 与父页面 Page ID 后，运行 `ch init-notion` 初始化。
 
-channel_groups:
-  - name: "主频道"
-    telegram_chat_id: "你的CHAT_ID"  # 使用 /chatid 命令获取
-    youtube_channels:
-      - "@频道1"
-      - "@频道2"
-```
+- **本地模式（可选）**：
+  ```powershell
+  copy config\config.local.example.yaml config\config.yaml
+  ```
+  按需调整 telegram / downloader / 频道组配置，即可直接在本地运行。
 
-**获取 Chat ID：**
-1. 启动 Bot：`.\ch start`
-2. 将 Bot 添加到目标频道
-3. 在频道中发送 `/chatid`
-4. 复制 Bot 回复的 Chat ID
+**Notion 模式下获取频道 Chat ID：**
+1. 在 Notion Config Database 中添加频道信息
+2. （可选）运行 `ch sync-to-notion --data config` 让本地 YAML 与 Notion 保持一致
+3. 将 Bot 加入目标频道后，在频道内发送 `/chatid`
+4. 记录 Bot 回复的 Chat ID 并写入 Notion 配置
 
 ### 3. 启动服务
 
@@ -64,14 +61,24 @@ channel_groups:
 
 ## 常用命令
 
+### 基本命令
 ```powershell
-.\ch start      # 启动服务（后台运行）
-.\ch stop       # 停止服务
-.\ch status     # 查看运行状态
-.\ch logs       # 查看日志
-.\ch logs -f    # 实时日志
-.\ch cleanup    # 强制清理进程
+.\ch start              # 启动服务（后台运行）
+.\ch start --mode notion # 使用 Notion 模式启动
+.\ch stop               # 停止服务
+.\ch status             # 查看运行状态
+.\ch logs               # 查看日志
+.\ch logs -f            # 实时日志
+.\ch cleanup            # 强制清理进程
 ```
+
+### Notion 远程配置
+```powershell
+.\ch init-notion        # 初始化 Notion 数据库结构
+.\ch sync-to-notion     # 手动同步本地数据到 Notion
+```
+
+> 📘 **Notion 配置详细指南**: [docs/NOTION_SETUP.md](docs/NOTION_SETUP.md)
 
 ---
 

@@ -1,0 +1,45 @@
+# ChronoLullaby 配置示例（本地模式）
+#
+# 适用场景：
+# - 不使用 Notion，所有配置/存档均存储在本地文件中
+# - 或希望在切换到 Notion 之前，先使用本地模式验证流程
+#
+# 使用步骤：
+# 1. 复制本文件为 config/config.yaml
+# 2. 按需修改 telegram/downloader/频道组等内容
+# 3. 运行 `ch start`（默认为本地模式）
+
+mode: local
+
+log:
+  level: INFO           # 可选：全局日志级别（DEBUG/INFO/WARNING/ERROR）
+
+telegram:
+  bot_token: "YOUR_TELEGRAM_BOT_TOKEN"
+  send_interval: 4920
+
+downloader:
+  download_interval: 0
+  video_delay_min: 120
+  video_delay_max: 240
+  channel_delay_min: 20
+  channel_delay_max: 40
+  cookies_file: "config/youtube.cookies"
+  download_archive: "data/download_archive.txt"
+  filter_days: 3
+  max_videos_per_channel: 6
+
+channel_groups:
+  - name: "示例频道组"
+    description: "本地模式示例"
+    enabled: true
+    telegram_chat_id: "-1001234567890"
+    audio_folder: "au/sample"
+    youtube_channels:
+      - "@SampleChannel"
+      - "@AnotherChannel"
+
+# 补充说明：
+# - 本地模式会在 data/ 目录下生成 sent_archive_* 文件，并使用 download_archive 记录下载历史
+# - 可以添加多个频道组，每个组可配置独立的 bot_token / audio_folder / 频道列表
+# - 若后续迁移到 Notion，可运行 `ch sync-to-notion --data config` 将本地配置写入 Notion

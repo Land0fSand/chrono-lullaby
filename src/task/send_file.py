@@ -14,8 +14,8 @@ if sys.stderr.encoding != 'utf-8':
 from telegram.ext import ContextTypes
 from telegram.error import TimedOut, TelegramError
 from contextlib import suppress
-from logger import get_logger, log_with_context
-from config import get_sent_archive_path
+from logger import get_logger, log_with_context, TRACE_LEVEL
+from config import get_sent_archive_path, get_config_provider
 
 # 使用统一的日志系统
 logger = get_logger('bot.send_file')
@@ -63,7 +63,7 @@ def extract_video_info_from_filename(filename: str) -> tuple:
 
 def record_sent_file(chat_id: str, video_id: str, title: str, channel_name: str = None) -> None:
     """
-    记录已发送的文件到两个archive文件
+    记录已发送的文件（使用配置提供者，支持本地和Notion）
     
     Args:
         chat_id: Telegram 频道 ID
@@ -72,37 +72,33 @@ def record_sent_file(chat_id: str, video_id: str, title: str, channel_name: str 
         channel_name: YouTube 频道名（可选）
     """
     try:
-        # 1. 记录机器格式（yt-dlp 格式）
-        machine_archive = get_sent_archive_path(chat_id, readable=False)
-        machine_line = f"youtube {video_id}\n"
+        # 使用配置提供者记录
+        provider = get_config_provider()
         
-        # 检查是否已存在，避免重复记录
-        if os.path.exists(machine_archive):
-            with open(machine_archive, 'r', encoding='utf-8') as f:
-                if machine_line in f.read():
-                    logger.debug(f"视频 {video_id} 已在发送记录中")
-                    return
+        # 检查是否已存在
+        if provider.has_sent_record(video_id, chat_id):
+            logger.trace(f"视频 {video_id} 已在发送记录中")
+            return
         
-        with open(machine_archive, 'a', encoding='utf-8') as f:
-            f.write(machine_line)
+        # 添加记录（配置提供者会处理本地或Notion存储）
+        file_path = f"{channel_name or 'unknown'}.{video_id}.{title}.m4a"
+        success = provider.add_sent_record(video_id, chat_id, title, file_path)
         
-        # 2. 记录人类可读格式（包含频道名）
-        readable_archive = get_sent_archive_path(chat_id, readable=True)
-        if channel_name:
-            readable_line = f"{video_id} [{channel_name}] {title}\n"
+        if success:
+            log_with_context(
+                logger, TRACE_LEVEL,
+                "已记录发送记录",
+                video_id=video_id,
+                channel_name=channel_name,
+                chat_id=chat_id
+            )
         else:
-            readable_line = f"{video_id} [{title}]\n"
-        
-        with open(readable_archive, 'a', encoding='utf-8') as f:
-            f.write(readable_line)
-        
-        log_with_context(
-            logger, logging.DEBUG,
-            "已记录发送记录",
-            video_id=video_id,
-            channel_name=channel_name,
-            chat_id=chat_id
-        )
+            log_with_context(
+                logger, logging.WARNING,
+                "记录发送记录失败（但不影响发送）",
+                video_id=video_id,
+                chat_id=chat_id
+            )
         
     except Exception as e:
         log_with_context(
@@ -125,7 +121,6 @@ async def send_file(context: ContextTypes.DEFAULT_TYPE, chat_id, audio_folder) -
              and not f.endswith('.tmp')
              and '.tmp.' not in f]  # 也过滤掉 .tmp.m4a 这种格式
     if not files:
-        logger.debug("没有找到音频文件")
         return
     # 按文件创建时间排序，确保最早的文件先发送
     files.sort(key=lambda x: os.path.getctime(os.path.join(audio_folder, x)))
@@ -178,7 +173,7 @@ async def send_file(context: ContextTypes.DEFAULT_TYPE, chat_id, audio_folder) -
                     await send_single_file(context, chat_id, split_file_path)
                     try:
                         os.remove(split_file_path)  # 发送后删除临时文件
-                        logger.debug(f"已删除切割文件: {split_file_path}")
+                        logger.trace(f"已删除切割文件: {split_file_path}")
                     except OSError as e:
                         logger.error(f"删除切割文件失败: {split_file_path}, 错误: {e}")
                 try:
@@ -209,7 +204,7 @@ def _recursive_split_and_check(file_path, original_file_size_mb, num_parts_to_tr
     max_recursion_depth: maximum allowed recursion calls.
     """
     log_with_context(
-        logger, logging.DEBUG,
+        logger, TRACE_LEVEL,
         "尝试切割文件",
         file_name=os.path.basename(file_path),
         num_parts=num_parts_to_try,
@@ -253,7 +248,7 @@ def _recursive_split_and_check(file_path, original_file_size_mb, num_parts_to_tr
             # For now, let it proceed but be aware.
 
         log_with_context(
-            logger, logging.DEBUG,
+            logger, TRACE_LEVEL,
             "FFmpeg 切割参数",
             input_file=file_path,
             output_pattern=segment_pattern,

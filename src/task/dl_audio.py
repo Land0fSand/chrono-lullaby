@@ -6,6 +6,7 @@ import json
 import sys
 import time
 import logging
+import re
 from typing import Optional
 
 # 设置默认编码为UTF-8
@@ -25,7 +26,7 @@ from config import (
     get_filter_days,
     get_max_videos_per_channel,
 )
-from logger import get_logger, log_with_context
+from logger import get_logger, log_with_context, TRACE_LEVEL
 import random
 
 # 使用统一的日志系统
@@ -38,25 +39,48 @@ class TimestampedYTDLLogger:
     def __init__(self):
         self._logger = get_logger('downloader.yt-dlp')
 
+    def _clean_message(self, msg):
+        if msg is None:
+            return ""
+        text = str(msg).strip()
+        if not text:
+            return ""
+        text = text.replace('[0;31m', '').replace('[0m', '')
+        return re.sub(r'\x1b\[[0-9;]*m', '', text).strip()
+
+    def _log_trace(self, msg):
+        cleaned = self._clean_message(msg)
+        if cleaned:
+            self._logger.trace(cleaned)
+
     def debug(self, msg):
-        if msg.strip():
-            self._logger.debug(msg)
+        self._log_trace(msg)
 
     def info(self, msg):
-        if msg.strip():
-            self._logger.info(msg)
+        cleaned = self._clean_message(msg)
+        if cleaned:
+            self._logger.info(cleaned)
 
     def warning(self, msg):
-        if msg.strip():
-            self._logger.warning(msg)
+        cleaned = self._clean_message(msg)
+        if cleaned:
+            self._logger.warning(cleaned)
 
     def error(self, msg):
-        if msg.strip():
-            self._logger.error(msg)
+        cleaned = self._clean_message(msg)
+        if not cleaned:
+            return
+        lower = cleaned.lower()
+        if 'members-only content' in lower or 'join this channel' in lower:
+            # yt-dlp 提示会员专享内容，降级为 trace 以避免刷屏
+            self._logger.trace(cleaned)
+        else:
+            self._logger.error(cleaned)
 
     def critical(self, msg):
-        if msg.strip():
-            self._logger.critical(msg)
+        cleaned = self._clean_message(msg)
+        if cleaned:
+            self._logger.critical(cleaned)
 
 yt_base_url = "https://www.youtube.com/"
 
@@ -148,7 +172,7 @@ def member_content_filter(info_dict):
 
         # 只过滤私人视频（这个确实无法下载）
         if info_dict.get("availability") == "private":
-            logger.info(f"⏭️ 跳过私人视频: {video_id}")
+            logger.trace(f"⏭️ 跳过私人视频: {video_id}")
             return "私人视频"
 
         # 其他情况：允许尝试下载
@@ -166,13 +190,13 @@ def combined_filter(info_dict):
         # 先检查会员内容过滤
         member_result = member_content_filter(info_dict)
         if member_result:
-            logger.debug(f"过滤器跳过: {info_dict.get('title', '未知标题')} - {member_result}")
+            logger.trace(f"过滤器跳过: {info_dict.get('title', '未知标题')} - {member_result}")
             return member_result
 
         # 再检查时间过滤
         time_result = oneday_filter(info_dict)
         if time_result:
-            logger.debug(f"过滤器跳过: {info_dict.get('title', '未知标题')} - {time_result}")
+            logger.trace(f"过滤器跳过: {info_dict.get('title', '未知标题')} - {time_result}")
             return time_result
 
         return None
@@ -288,15 +312,15 @@ def progress_hook(d):
                 if speed:
                     speed_mb = speed / 1024 / 1024
                     # 进度信息使用 DEBUG 级别，避免日志过多
-                    logger.debug(f"下载进度: {percent:.1f}% - {speed_mb:.1f}MB/s")
+                    logger.trace(f"下载进度: {percent:.1f}% - {speed_mb:.1f}MB/s")
                 else:
-                    logger.debug(f"下载进度: {percent:.1f}%")
+                    logger.trace(f"下载进度: {percent:.1f}%")
         except Exception:
             pass
     elif d['status'] == 'finished':
-        logger.debug(f"下载完成: {os.path.basename(d.get('filename', ''))}")
+        logger.trace(f"下载完成: {os.path.basename(d.get('filename', ''))}")
     elif d['status'] == 'already_downloaded':
-        logger.debug(f"已存在: {d.get('title', '')}")
+        logger.trace(f"已存在: {d.get('title', '')}")
 
 
 def get_available_format(url):
@@ -417,7 +441,7 @@ def dl_audio_latest(channel_name, audio_folder=None, group_name=None):
                 video_id = video_info.get('id', 'unknown')
                 
                 if not video_url:
-                    logger.debug(f"跳过条目，无URL: {video_title}")
+                    logger.trace(f"跳过条目，无URL: {video_title}")
                     stats['error'] += 1
                     stats['details'].append({
                         'index': idx,
@@ -438,7 +462,7 @@ def dl_audio_latest(channel_name, audio_folder=None, group_name=None):
                     upload_date_str = f"{upload_date_str[:2]}-{upload_date_str[2:]}"
                 
                 log_with_context(
-                    logger, logging.INFO,
+                    logger, TRACE_LEVEL,
                     f"检查视频 [{idx}/{stats['total']}] {video_id}",
                     channel=channel_name,
                     title=video_title[:60] + "..." if len(video_title) > 60 else video_title,
@@ -483,7 +507,7 @@ def dl_audio_latest(channel_name, audio_folder=None, group_name=None):
                 current_video_ydl_opts['outtmpl'] = temp_audio_path_without_ext + '.tmp'
 
                 log_with_context(
-                    logger, logging.DEBUG,
+                    logger, TRACE_LEVEL,
                     "下载路径配置",
                     temp_template=f"{temp_audio_path_without_ext}.tmp",
                     expected_temp=expected_temp_audio_path,
@@ -494,7 +518,7 @@ def dl_audio_latest(channel_name, audio_folder=None, group_name=None):
                 filter_result = combined_filter(video_info)
                 if filter_result:
                     log_with_context(
-                        logger, logging.INFO,
+                        logger, TRACE_LEVEL,
                         f"⏭️ 跳过 {video_id} ({filter_result})",
                         channel=channel_name
                     )
@@ -513,7 +537,7 @@ def dl_audio_latest(channel_name, audio_folder=None, group_name=None):
                         video_ydl.download([video_url]) 
                     
                     if os.path.exists(expected_temp_audio_path):
-                        logger.debug(f"转换完成: {os.path.basename(expected_temp_audio_path)}")
+                        logger.trace(f"转换完成: {os.path.basename(expected_temp_audio_path)}")
                         if safe_rename_file(expected_temp_audio_path, final_destination_audio_path):
                             file_size_mb = os.path.getsize(final_destination_audio_path) / (1024 * 1024)
                             log_with_context(
@@ -653,14 +677,14 @@ def dl_audio_latest(channel_name, audio_folder=None, group_name=None):
                     if os.path.exists(expected_temp_audio_path):
                         try: 
                             os.remove(expected_temp_audio_path)
-                            logger.debug(f"已清理部分下载的音频文件: {expected_temp_audio_path}")
+                            logger.trace(f"已清理部分下载的音频文件: {expected_temp_audio_path}")
                         except OSError: pass
                     for ext_try in ['.webm', '.mp4', '.mkv']:
                         potential_orig_file = temp_audio_path_without_ext + ext_try + '.tmp'
                         if os.path.exists(potential_orig_file):
                             try:
                                 os.remove(potential_orig_file)
-                                logger.debug(f"已清理部分下载的视频文件: {potential_orig_file}")
+                                logger.trace(f"已清理部分下载的视频文件: {potential_orig_file}")
                             except OSError: pass
                             break
                     continue
@@ -794,7 +818,7 @@ def dl_audio_closest_after(au_folder, channel_name, target_timestamp=None):
         return False
     
     ydl_opts = get_ydl_opts()
-    logger.debug("已配置下载选项 (将使用临时目录)")
+    logger.trace("已配置下载选项 (将使用临时目录)")
     
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         try:
@@ -883,7 +907,7 @@ def dl_audio_closest_after(au_folder, channel_name, target_timestamp=None):
             final_destination_audio_path = os.path.join(au_folder, f"{final_audio_filename_stem}{expected_audio_ext}")
 
             if os.path.exists(final_destination_audio_path):
-                logger.debug(f"最终音频文件已存在，跳过: {final_destination_audio_path}")
+                logger.trace(f"最终音频文件已存在，跳过: {final_destination_audio_path}")
                 timestamp_to_update = closest_video.get("timestamp", closest_video.get("upload_date"))
                 if timestamp_to_update:
                     if isinstance(timestamp_to_update, str):
