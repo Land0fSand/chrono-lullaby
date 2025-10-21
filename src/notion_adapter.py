@@ -24,6 +24,20 @@ except ImportError:
     Client = None
     APIResponseError = Exception
 
+# 系统日志（延迟初始化）
+_sys_logger = None
+
+def _get_sys_logger():
+    """延迟初始化系统日志"""
+    global _sys_logger
+    if _sys_logger is None:
+        try:
+            from logger import get_system_logger
+            _sys_logger = get_system_logger()
+        except Exception:
+            pass
+    return _sys_logger
+
 
 class NotionAdapter:
     """Notion API 适配器类"""
@@ -53,6 +67,7 @@ class NotionAdapter:
         Returns:
             API 调用结果
         """
+        sys_logger = _get_sys_logger()
         last_error = None
         for attempt in range(self.max_retries):
             try:
@@ -63,17 +78,63 @@ class NotionAdapter:
                 if e.code == 'rate_limited':
                     wait_time = (2 ** attempt) * 1
                     print(f"API 限流，等待 {wait_time} 秒后重试...")
+                    if sys_logger:
+                        from logger import log_with_context
+                        import logging
+                        log_with_context(
+                            sys_logger, logging.WARNING,
+                            "Notion API 限流，准备重试",
+                            attempt=attempt + 1,
+                            max_retries=self.max_retries,
+                            wait_time=wait_time,
+                            func_name=func.__name__ if hasattr(func, '__name__') else str(func)
+                        )
                     time.sleep(wait_time)
                 else:
                     # 其他错误也进行重试
                     if attempt < self.max_retries - 1:
+                        if sys_logger:
+                            from logger import log_with_context
+                            import logging
+                            log_with_context(
+                                sys_logger, logging.WARNING,
+                                "Notion API 调用出错，准备重试",
+                                attempt=attempt + 1,
+                                max_retries=self.max_retries,
+                                error=str(e),
+                                error_code=e.code if hasattr(e, 'code') else 'unknown',
+                                func_name=func.__name__ if hasattr(func, '__name__') else str(func)
+                            )
                         time.sleep(1)
             except Exception as e:
                 last_error = e
                 if attempt < self.max_retries - 1:
+                    if sys_logger:
+                        from logger import log_with_context
+                        import logging
+                        log_with_context(
+                            sys_logger, logging.WARNING,
+                            "Notion API 调用异常，准备重试",
+                            attempt=attempt + 1,
+                            max_retries=self.max_retries,
+                            error=str(e),
+                            error_type=type(e).__name__,
+                            func_name=func.__name__ if hasattr(func, '__name__') else str(func)
+                        )
                     time.sleep(1)
         
         # 所有重试都失败
+        if sys_logger:
+            from logger import log_with_context
+            import logging
+            log_with_context(
+                sys_logger, logging.ERROR,
+                "Notion API 调用失败，已达最大重试次数",
+                max_retries=self.max_retries,
+                error=str(last_error),
+                error_type=type(last_error).__name__,
+                func_name=func.__name__ if hasattr(func, '__name__') else str(func)
+            )
         raise last_error
     
     # ============================================================
@@ -161,12 +222,50 @@ class NotionAdapter:
         Returns:
             创建的页面 ID
         """
-        page = self._retry_api_call(
-            self.client.pages.create,
-            parent={"database_id": database_id},
-            properties=properties
-        )
-        return page["id"]
+        sys_logger = _get_sys_logger()
+        
+        if sys_logger:
+            from logger import log_with_context
+            import logging
+            log_with_context(
+                sys_logger, logging.DEBUG,
+                "Notion API: 准备添加页面到数据库",
+                database_id=database_id[:8] + "...",
+                properties_count=len(properties),
+                property_names=list(properties.keys())
+            )
+        
+        try:
+            page = self._retry_api_call(
+                self.client.pages.create,
+                parent={"database_id": database_id},
+                properties=properties
+            )
+            page_id = page["id"]
+            
+            if sys_logger:
+                log_with_context(
+                    sys_logger, logging.DEBUG,
+                    "Notion API: 成功添加页面",
+                    database_id=database_id[:8] + "...",
+                    page_id=page_id[:8] + "..."
+                )
+            
+            return page_id
+        except Exception as e:
+            if sys_logger:
+                from logger import log_with_context
+                import logging
+                import traceback
+                log_with_context(
+                    sys_logger, logging.ERROR,
+                    "Notion API: 添加页面失败",
+                    database_id=database_id[:8] + "...",
+                    error=str(e),
+                    error_type=type(e).__name__,
+                    traceback=traceback.format_exc()
+                )
+            raise
     
     def update_page(self, page_id: str, properties: Dict[str, Any]) -> Dict:
         """

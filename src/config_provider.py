@@ -17,6 +17,20 @@ if sys.stdout.encoding != 'utf-8':
 if sys.stderr.encoding != 'utf-8':
     sys.stderr.reconfigure(encoding='utf-8')
 
+# 系统日志（延迟初始化）
+_sys_logger = None
+
+def _get_sys_logger():
+    """延迟初始化系统日志"""
+    global _sys_logger
+    if _sys_logger is None:
+        try:
+            from logger import get_system_logger
+            _sys_logger = get_system_logger()
+        except Exception:
+            pass
+    return _sys_logger
+
 
 class BaseConfigProvider(ABC):
     """配置提供者基类"""
@@ -224,11 +238,14 @@ class LocalConfigProvider(BaseConfigProvider):
         """加载下载存档"""
         if self._download_archive is not None:
             return self._download_archive
-        
+
         archive_file = self._get_config_value('downloader.download_archive', 'data/download_archive.txt')
         if not os.path.isabs(archive_file):
             archive_file = os.path.join(self.project_root, archive_file)
-        
+
+        # 确保 data 目录存在
+        os.makedirs(os.path.dirname(archive_file), exist_ok=True)
+
         self._download_archive = set()
         if os.path.exists(archive_file):
             try:
@@ -239,7 +256,7 @@ class LocalConfigProvider(BaseConfigProvider):
                             self._download_archive.add(line)
             except Exception as e:
                 print(f"警告：加载下载存档失败: {e}")
-        
+
         return self._download_archive
     
     def add_download_record(self, video_id: str, channel: str, status: str = "completed", machine_id: Optional[str] = None) -> bool:
@@ -272,11 +289,14 @@ class LocalConfigProvider(BaseConfigProvider):
         """加载已发送存档"""
         if chat_id in self._sent_archives:
             return self._sent_archives[chat_id]
-        
+
         # 清理 chat_id，去除负号和特殊字符
         clean_id = str(chat_id).replace('-', '').replace('+', '')
         archive_file = os.path.join(self.project_root, 'data', f'sent_archive_{clean_id}.txt')
-        
+
+        # 确保 data 目录存在
+        os.makedirs(os.path.dirname(archive_file), exist_ok=True)
+
         self._sent_archives[chat_id] = set()
         if os.path.exists(archive_file):
             try:
@@ -287,7 +307,7 @@ class LocalConfigProvider(BaseConfigProvider):
                             self._sent_archives[chat_id].add(line)
             except Exception as e:
                 print(f"警告：加载已发送存档失败: {e}")
-        
+
         return self._sent_archives[chat_id]
     
     def add_sent_record(self, video_id: str, chat_id: str, title: str, file_path: str, machine_id: Optional[str] = None) -> bool:
@@ -588,9 +608,25 @@ class NotionConfigProvider(BaseConfigProvider):
     
     def add_download_record(self, video_id: str, channel: str, status: str = "completed", machine_id: Optional[str] = None) -> bool:
         """添加下载记录到 Notion"""
+        sys_logger = _get_sys_logger()
+        
         database_id = self.config_data.get('database_ids', {}).get('download_archive')
         if not database_id:
+            if sys_logger:
+                sys_logger.error("Notion 下载记录数据库 ID 未配置")
             return False
+        
+        if sys_logger:
+            from logger import log_with_context
+            import logging
+            log_with_context(
+                sys_logger, logging.DEBUG,
+                "准备写入 Notion 下载记录",
+                video_id=video_id,
+                channel=channel,
+                status=status,
+                database_id=database_id[:8] + "..."
+            )
         
         try:
             properties = {
@@ -605,6 +641,13 @@ class NotionConfigProvider(BaseConfigProvider):
             record_machine_id = machine_id or self.config_data.get('sync', {}).get('machine_id')
             if record_machine_id:
                 properties["machine_id"] = self.adapter.build_text_property(record_machine_id)
+            
+            if sys_logger:
+                log_with_context(
+                    sys_logger, logging.DEBUG,
+                    "Notion 下载记录属性已构建",
+                    properties_keys=list(properties.keys())
+                )
 
             self.adapter.add_page_to_database(database_id, properties)
 
@@ -612,9 +655,30 @@ class NotionConfigProvider(BaseConfigProvider):
             if self._download_archive_cache is not None:
                 self._download_archive_cache.add(video_id)
             
+            if sys_logger:
+                log_with_context(
+                    sys_logger, logging.INFO,
+                    "成功写入 Notion 下载记录",
+                    video_id=video_id,
+                    channel=channel
+                )
+            
             return True
         except Exception as e:
             print(f"错误：向 Notion 写入下载记录失败: {e}")
+            if sys_logger:
+                from logger import log_with_context
+                import logging
+                import traceback
+                log_with_context(
+                    sys_logger, logging.ERROR,
+                    "向 Notion 写入下载记录失败",
+                    video_id=video_id,
+                    channel=channel,
+                    error=str(e),
+                    error_type=type(e).__name__,
+                    traceback=traceback.format_exc()
+                )
             return False
     
     def has_download_record(self, video_id: str) -> bool:
@@ -654,9 +718,25 @@ class NotionConfigProvider(BaseConfigProvider):
     
     def add_sent_record(self, video_id: str, chat_id: str, title: str, file_path: str, machine_id: Optional[str] = None) -> bool:
         """添加已发送记录到 Notion"""
+        sys_logger = _get_sys_logger()
+        
         database_id = self.config_data.get('database_ids', {}).get('sent_archive')
         if not database_id:
+            if sys_logger:
+                sys_logger.error("Notion 发送记录数据库 ID 未配置")
             return False
+        
+        if sys_logger:
+            from logger import log_with_context
+            import logging
+            log_with_context(
+                sys_logger, logging.DEBUG,
+                "准备写入 Notion 发送记录",
+                video_id=video_id,
+                chat_id=chat_id,
+                title=title[:50] + "..." if len(title) > 50 else title,
+                database_id=database_id[:8] + "..."
+            )
         
         try:
             properties = {
@@ -671,8 +751,18 @@ class NotionConfigProvider(BaseConfigProvider):
             title_property_name = "video_title"
             title_prop_type = self.adapter.get_database_property_type(database_id, title_property_name)
 
+            if sys_logger:
+                log_with_context(
+                    sys_logger, logging.DEBUG,
+                    "检查 video_title 属性类型",
+                    property_name=title_property_name,
+                    property_type=title_prop_type
+                )
+
             if title_prop_type is None:
                 try:
+                    if sys_logger:
+                        sys_logger.debug("video_title 属性不存在，尝试创建")
                     # Ensure new property exists to avoid conflicts with legacy 'title' field.
                     self.adapter.ensure_database_property(
                         database_id,
@@ -680,14 +770,32 @@ class NotionConfigProvider(BaseConfigProvider):
                         {"type": "rich_text", "rich_text": {}}
                     )
                     title_prop_type = self.adapter.get_database_property_type(database_id, title_property_name)
+                    if sys_logger:
+                        log_with_context(
+                            sys_logger, logging.INFO,
+                            "成功创建 video_title 属性",
+                            property_type=title_prop_type
+                        )
                 except Exception as ensure_exc:
                     print(f"Warning: failed to ensure video_title property: {ensure_exc}")
+                    if sys_logger:
+                        log_with_context(
+                            sys_logger, logging.WARNING,
+                            "创建 video_title 属性失败",
+                            error=str(ensure_exc)
+                        )
                     title_prop_type = None
 
             if title_prop_type is None:
                 # Fallback to legacy property name for backward compatibility.
                 title_property_name = "title"
                 title_prop_type = self.adapter.get_database_property_type(database_id, title_property_name)
+                if sys_logger:
+                    log_with_context(
+                        sys_logger, logging.DEBUG,
+                        "降级使用 title 属性",
+                        property_type=title_prop_type
+                    )
 
             if title_prop_type:
                 if title_prop_type == "title":
@@ -696,10 +804,19 @@ class NotionConfigProvider(BaseConfigProvider):
                     properties[title_property_name] = self.adapter.build_text_property(title)
             else:
                 print("Warning: no usable title property found, skipping title field write")
+                if sys_logger:
+                    sys_logger.warning("未找到可用的 title 属性，跳过标题字段")
 
             record_machine_id = machine_id or self.config_data.get('sync', {}).get('machine_id')
             if record_machine_id:
                 properties["machine_id"] = self.adapter.build_text_property(record_machine_id)
+
+            if sys_logger:
+                log_with_context(
+                    sys_logger, logging.DEBUG,
+                    "Notion 发送记录属性已构建",
+                    properties_keys=list(properties.keys())
+                )
 
             self.adapter.add_page_to_database(database_id, properties)
             
@@ -707,9 +824,30 @@ class NotionConfigProvider(BaseConfigProvider):
             if chat_id in self._sent_archives_cache:
                 self._sent_archives_cache[chat_id].add(video_id)
             
+            if sys_logger:
+                log_with_context(
+                    sys_logger, logging.INFO,
+                    "成功写入 Notion 发送记录",
+                    video_id=video_id,
+                    chat_id=chat_id
+                )
+            
             return True
         except Exception as e:
             print(f"错误：向 Notion 写入已发送记录失败: {e}")
+            if sys_logger:
+                from logger import log_with_context
+                import logging
+                import traceback
+                log_with_context(
+                    sys_logger, logging.ERROR,
+                    "向 Notion 写入发送记录失败",
+                    video_id=video_id,
+                    chat_id=chat_id,
+                    error=str(e),
+                    error_type=type(e).__name__,
+                    traceback=traceback.format_exc()
+                )
             return False
     
     def has_sent_record(self, video_id: str, chat_id: str) -> bool:

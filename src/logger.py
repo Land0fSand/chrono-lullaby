@@ -300,6 +300,71 @@ def get_logger(component: str, **kwargs) -> logging.Logger:
     return manager.get_logger(component, **kwargs)
 
 
+def get_system_logger() -> logging.Logger:
+    """
+    获取系统级logger，用于记录系统事件和调试信息
+    
+    系统日志特点：
+    - 日志文件：logs/system.log
+    - 记录内容：启动/停止、配置变更、进程管理等系统级事件
+    - 完全本地存储：不同步到Notion，确保即使Notion出现问题也能查看系统状态
+    - 支持所有日志级别：DEBUG到CRITICAL
+    - 格式：控制台人类可读，文件JSONL格式
+    
+    典型使用场景：
+    - 进程生命周期事件（启动、停止、重启）
+    - 配置加载和模式切换
+    - 服务启动和关闭
+    - 异常的系统状态
+    - 手动调试信息
+    
+    Returns:
+        配置好的系统级 logger 对象
+    
+    Examples:
+        >>> sys_logger = get_system_logger()
+        >>> sys_logger.info("启动器初始化完成")
+        >>> sys_logger.debug("子进程状态检查", extra={'extra_data': {'process': 'downloader', 'pid': 12345}})
+        >>> sys_logger.error("配置加载失败", extra={'extra_data': {'config_file': 'config.yaml', 'error': 'not found'}})
+    """
+    logger = logging.getLogger("chronolullaby.system")
+    target_level = _get_configured_log_level(logging.DEBUG)  # 系统日志默认支持 DEBUG
+    logger.setLevel(target_level)
+    logger.propagate = False
+
+    # 如果已经配置过，直接返回
+    if logger.handlers:
+        for handler in logger.handlers:
+            if handler.level not in (logging.ERROR, logging.NOTSET):
+                handler.setLevel(target_level)
+        return logger
+
+    manager = LoggerManager()
+    
+    # 控制台 Handler（人类可读格式）
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setLevel(target_level)
+    console_handler.setFormatter(ConsoleFormatter())
+    logger.addHandler(console_handler)
+
+    # 文件 Handler（JSONL 格式）- 系统日志
+    log_file = manager.log_dir / "system.log"
+    file_handler = logging.handlers.RotatingFileHandler(
+        log_file,
+        maxBytes=10 * 1024 * 1024,  # 10 MB
+        backupCount=5,
+        encoding='utf-8'
+    )
+    file_handler.setLevel(target_level)
+    file_handler.setFormatter(JSONFormatter())
+    logger.addHandler(file_handler)
+
+    # 系统日志不添加 Notion Handler，确保完全本地化
+    # 这样即使 Notion 同步出问题，系统日志也能正常工作
+
+    return logger
+
+
 def log_with_context(logger: logging.Logger, level: int, message: str, **context):
     """
     带上下文信息的日志记录

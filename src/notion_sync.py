@@ -18,6 +18,20 @@ if sys.stdout.encoding != 'utf-8':
 if sys.stderr.encoding != 'utf-8':
     sys.stderr.reconfigure(encoding='utf-8')
 
+# 系统日志（延迟初始化）
+_sys_logger = None
+
+def _get_sys_logger():
+    """延迟初始化系统日志"""
+    global _sys_logger
+    if _sys_logger is None:
+        try:
+            from logger import get_system_logger
+            _sys_logger = get_system_logger()
+        except Exception:
+            pass
+    return _sys_logger
+
 
 class NotionSyncService:
     """Notion 后台同步服务"""
@@ -49,8 +63,12 @@ class NotionSyncService:
     
     def start(self):
         """启动同步服务"""
+        sys_logger = _get_sys_logger()
+        
         if self.running:
             print("Notion 同步服务已在运行")
+            if sys_logger:
+                sys_logger.warning("尝试启动已运行的 Notion 同步服务")
             return
         
         self.running = True
@@ -71,19 +89,38 @@ class NotionSyncService:
         else:
             print("   存档同步间隔: 已禁用")
         print(f"   机器标识: {self.machine_id}")
+        
+        if sys_logger:
+            from logger import log_with_context
+            import logging
+            log_with_context(
+                sys_logger, logging.INFO,
+                "Notion 同步服务已启动",
+                log_interval=self.log_upload_interval,
+                archive_interval=self.archive_sync_interval,
+                machine_id=self.machine_id,
+                thread_id=log_thread.ident
+            )
     
     def stop(self):
         """停止同步服务"""
+        sys_logger = _get_sys_logger()
+        
         if not self.running:
             return
         
         self.running = False
+        
+        if sys_logger:
+            sys_logger.info("开始停止 Notion 同步服务")
         
         # 等待所有线程结束
         for thread in self.threads:
             thread.join(timeout=5)
         
         print("Notion 同步服务已停止")
+        if sys_logger:
+            sys_logger.info("Notion 同步服务已停止")
     
     def queue_log(self, log_type: str, level: str, message: str):
         """
@@ -145,6 +182,8 @@ class NotionSyncService:
         if not logs:
             return
         
+        sys_logger = _get_sys_logger()
+        
         print(f"正在上传 {len(logs)} 条日志到 Notion...")
         
         # 获取 Notion 适配器和数据库 ID
@@ -153,6 +192,8 @@ class NotionSyncService:
         
         if not database_id:
             print("警告：Logs 数据库 ID 未配置，跳过上传")
+            if sys_logger:
+                sys_logger.warning("Logs 数据库 ID 未配置，无法上传日志到 Notion")
             return
         
         # 批量添加日志
@@ -181,6 +222,17 @@ class NotionSyncService:
                     print(f"上传日志失败: {e}")
         
         print(f"日志上传完成: ✅ {success_count} 条成功, ❌ {failed_count} 条失败")
+        
+        if sys_logger:
+            from logger import log_with_context
+            import logging
+            log_with_context(
+                sys_logger, logging.DEBUG,
+                "Notion 日志批量上传完成",
+                total=len(logs),
+                success=success_count,
+                failed=failed_count
+            )
 
 
 # 全局同步服务实例
@@ -201,10 +253,22 @@ def init_sync_service(config_provider, sync_config: Dict[str, Any]):
         sync_config: 同步配置
     """
     global _sync_service
+    sys_logger = _get_sys_logger()
     
     if _sync_service is not None:
         print("同步服务已初始化")
+        if sys_logger:
+            sys_logger.warning("尝试重复初始化 Notion 同步服务")
         return _sync_service
+    
+    if sys_logger:
+        from logger import log_with_context
+        import logging
+        log_with_context(
+            sys_logger, logging.DEBUG,
+            "初始化 Notion 同步服务",
+            sync_config=sync_config
+        )
     
     _sync_service = NotionSyncService(config_provider, sync_config)
     _sync_service.start()
@@ -215,8 +279,11 @@ def init_sync_service(config_provider, sync_config: Dict[str, Any]):
 def stop_sync_service():
     """停止同步服务"""
     global _sync_service
+    sys_logger = _get_sys_logger()
     
     if _sync_service is not None:
+        if sys_logger:
+            sys_logger.info("请求停止 Notion 同步服务")
         _sync_service.stop()
         _sync_service = None
 

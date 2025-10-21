@@ -12,6 +12,21 @@ if sys.stderr.encoding != 'utf-8':
 
 from dotenv import load_dotenv
 
+# 延迟导入系统日志以避免循环依赖
+_sys_logger = None
+
+def _get_sys_logger():
+    """延迟初始化系统日志"""
+    global _sys_logger
+    if _sys_logger is None:
+        try:
+            from logger import get_system_logger
+            _sys_logger = get_system_logger()
+        except Exception:
+            # 如果导入失败，使用None
+            pass
+    return _sys_logger
+
 # 获取项目根目录
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -42,17 +57,37 @@ def init_config_provider(mode_override: Optional[str] = None):
     """
     global _config_provider
     
-    # 加载基础配置
+    # 加载基础配置（先加载配置，避免循环依赖）
     config = load_yaml_config()
+    
+    # 配置加载完成后，才能安全地使用系统日志
+    sys_logger = _get_sys_logger()
+    
+    if sys_logger:
+        sys_logger.debug("开始初始化配置提供者", extra={'extra_data': {'mode_override': mode_override}})
+    
     if config is None:
         # 回退到本地模式
         from config_provider import LocalConfigProvider
         _config_provider = LocalConfigProvider(PROJECT_ROOT, CONFIG_YAML_FILE)
+        if sys_logger:
+            sys_logger.info("配置文件不存在，使用本地配置提供者")
         return
     
     # 确定配置模式
     legacy_source = config.get('config_source', {})
     mode = mode_override or config.get('mode') or legacy_source.get('mode', 'local')
+    
+    if sys_logger:
+        from logger import log_with_context
+        import logging
+        log_with_context(
+            sys_logger, logging.INFO,
+            "确定配置模式",
+            mode=mode,
+            override=mode_override is not None,
+            source="override" if mode_override else "config file"
+        )
 
     if mode == 'notion':
         # Notion 模式
@@ -67,6 +102,8 @@ def init_config_provider(mode_override: Optional[str] = None):
             
             if not api_key or api_key == 'secret_xxxxx':
                 print("错误：Notion API Key 未配置，降级到本地模式")
+                if sys_logger:
+                    sys_logger.warning("Notion API Key 未配置，降级到本地模式")
                 from config_provider import LocalConfigProvider
                 _config_provider = LocalConfigProvider(PROJECT_ROOT, CONFIG_YAML_FILE)
                 return
@@ -75,10 +112,27 @@ def init_config_provider(mode_override: Optional[str] = None):
             adapter = NotionAdapter(api_key)
             _config_provider = NotionConfigProvider(adapter, notion_config)
             print("✅ 使用 Notion 远程配置模式")
+            if sys_logger:
+                from logger import log_with_context
+                import logging
+                log_with_context(
+                    sys_logger, logging.INFO,
+                    "Notion 配置提供者初始化成功",
+                    page_id=notion_config.get('page_id', 'N/A')[:8] + '...'
+                )
             
         except Exception as e:
             print(f"错误：初始化 Notion 配置提供者失败: {e}")
             print("降级到本地模式")
+            if sys_logger:
+                from logger import log_with_context
+                import logging
+                log_with_context(
+                    sys_logger, logging.ERROR,
+                    "Notion 配置提供者初始化失败，降级到本地模式",
+                    error=str(e),
+                    error_type=type(e).__name__
+                )
             from config_provider import LocalConfigProvider
             _config_provider = LocalConfigProvider(PROJECT_ROOT, CONFIG_YAML_FILE)
     else:
@@ -86,6 +140,8 @@ def init_config_provider(mode_override: Optional[str] = None):
         from config_provider import LocalConfigProvider
         _config_provider = LocalConfigProvider(PROJECT_ROOT, CONFIG_YAML_FILE)
         print("✅ 使用本地配置模式")
+        if sys_logger:
+            sys_logger.info("本地配置提供者初始化成功")
 
 
 def get_config_provider():
@@ -115,6 +171,9 @@ def load_yaml_config(reload: bool = False) -> Optional[Dict[str, Any]]:
     
     Returns:
         配置字典，如果文件不存在或加载失败则返回 None
+    
+    注意：此函数不使用系统日志，因为它是最底层的配置加载函数，
+    系统日志初始化时会调用此函数读取日志配置，会形成循环依赖。
     """
     global _config_cache
     
@@ -303,6 +362,10 @@ def get_all_channel_groups(use_cache: bool = True) -> List[Dict[str, Any]]:
 
 # 确保必要的目录存在
 os.makedirs(AUDIO_FOLDER, exist_ok=True)
+
+# 确保 data 目录存在（用于存放下载和发送记录）
+data_dir = os.path.join(PROJECT_ROOT, 'data')
+os.makedirs(data_dir, exist_ok=True)
 
 # 打印配置来源信息
 if load_yaml_config() is not None:

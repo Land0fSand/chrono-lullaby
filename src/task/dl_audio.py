@@ -25,6 +25,7 @@ from config import (
     get_video_delay_max,
     get_filter_days,
     get_max_videos_per_channel,
+    get_config_provider,
 )
 from logger import get_logger, log_with_context, TRACE_LEVEL
 import random
@@ -152,6 +153,47 @@ def safe_rename_file(src, dst, max_retries=5):
                 src=src, dst=dst, error=str(e), error_type=type(e).__name__
             )
             return False
+
+
+def record_download_entry(video_id: str, channel_name: Optional[str]) -> None:
+    """
+    ��¼������¼���������ṩ�ߣ�֧�ֱ��غ� Notion��
+    """
+    try:
+        provider = get_config_provider()
+        if provider is None:
+            return
+
+        has_check = getattr(provider, "has_download_record", None)
+        if callable(has_check) and has_check(video_id):
+            logger.trace(f"������浵��¼�Ѵ���: {video_id}")
+            return
+
+        add_record = getattr(provider, "add_download_record", None)
+        if callable(add_record):
+            success = add_record(video_id, channel_name or "unknown")
+            if success:
+                log_with_context(
+                    logger, TRACE_LEVEL,
+                    "�Ѽ�¼����浵",
+                    video_id=video_id,
+                    channel=channel_name
+                )
+            else:
+                log_with_context(
+                    logger, logging.WARNING,
+                    "��¼����浵ʧ��",
+                    video_id=video_id,
+                    channel=channel_name
+                )
+    except Exception as err:
+        log_with_context(
+            logger, logging.ERROR,
+            "��¼����浵����",
+            video_id=video_id,
+            channel=channel_name,
+            error=str(err)
+        )
 
 
 def member_content_filter(info_dict):
@@ -556,6 +598,8 @@ def dl_audio_latest(channel_name, audio_folder=None, group_name=None):
                                 'size_mb': round(file_size_mb, 2)
                             })
                             
+                            record_download_entry(video_id, channel_name)
+                            
                             # 视频间延迟（如果不是最后一个视频）
                             if idx < stats['total']:
                                 video_delay_min = get_video_delay_min()
@@ -932,6 +976,8 @@ def dl_audio_closest_after(au_folder, channel_name, target_timestamp=None):
                         "成功重命名历史视频音频",
                         destination=final_destination_audio_path
                     )
+
+                    record_download_entry(video_id_history, channel_name)
                 else:
                     logger.error(f"历史视频重命名失败，跳过此文件")
 
