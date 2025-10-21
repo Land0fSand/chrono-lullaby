@@ -574,8 +574,8 @@ class NotionConfigProvider(BaseConfigProvider):
         
         try:
             blocks = self.adapter.get_page_blocks(page_id)
-            # 查找 code block
-            for block in blocks:
+            # 遍历 code block（从最新的 block 开始，方便取到最近更新的 cookies）
+            for block in reversed(blocks):
                 if block.get('type') == 'code':
                     code_data = block.get('code', {})
                     rich_text = code_data.get('rich_text', [])

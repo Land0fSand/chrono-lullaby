@@ -196,6 +196,50 @@ def record_download_entry(video_id: str, channel_name: Optional[str]) -> None:
         )
 
 
+def ensure_cookies_available() -> bool:
+    """
+    ��ȷ cookies �ļ���ڣ��ҽ��� Notion ����Դ�����طִ浽������
+    """
+    if os.path.exists(COOKIES_FILE):
+        return True
+
+    try:
+        provider = get_config_provider()
+    except Exception as err:
+        logger.warning(f"��ȡ�����ṩ�߽���ʧ��: {err}")
+        return False
+
+    if not provider:
+        return False
+
+    fetcher = getattr(provider, "get_cookies_content", None)
+    if not callable(fetcher):
+        return False
+
+    try:
+        content = fetcher()
+    except Exception as err:
+        logger.error(f"�� Notion ��ȡ cookies ʧ��: {err}")
+        return False
+
+    if not content or not content.strip():
+        logger.warning("�� Notion δ�õ����õ� cookies ����")
+        return False
+
+    target_dir = os.path.dirname(COOKIES_FILE)
+    if target_dir and not os.path.exists(target_dir):
+        os.makedirs(target_dir, exist_ok=True)
+
+    try:
+        with open(COOKIES_FILE, "w", encoding="utf-8") as f:
+            f.write(content)
+        logger.info(f"�Ѵ� Notion ͬ�� cookies ������: {COOKIES_FILE}")
+        return True
+    except Exception as err:
+        logger.error(f"д�� cookies �ļ�ʧ��: {err}")
+        return False
+
+
 def member_content_filter(info_dict):
     """
     过滤会员专属内容
@@ -286,6 +330,8 @@ def oneday_filter(info_dict):
 def check_cookies():
     """检查cookies文件是否存在且有效"""
     if not os.path.exists(COOKIES_FILE):
+        if ensure_cookies_available() and os.path.exists(COOKIES_FILE):
+            return True
         logger.error("未找到cookies文件！")
         logger.info("请按以下步骤操作：")
         logger.info("1. 安装Chrome扩展：'Cookie-Editor'")
