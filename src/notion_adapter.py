@@ -268,6 +268,62 @@ class NotionAdapter:
         
         return results
     
+
+    def ensure_database_property(self, database_id: str, property_name: str, property_schema: Dict[str, Any]) -> bool:
+        """确保数据库存在指定属性（缺失时自动添加）"""
+        database = self._retry_api_call(
+            self.client.databases.retrieve,
+            database_id=database_id
+        )
+        properties = database.get('properties', {})
+        if property_name in properties:
+            return False
+        self._retry_api_call(
+            self.client.databases.update,
+            database_id=database_id,
+            properties={
+                property_name: property_schema
+            }
+        )
+        return True
+
+    def get_database_property_type(self, database_id: str, property_name: str) -> Optional[str]:
+        database = self._retry_api_call(
+            self.client.databases.retrieve,
+            database_id=database_id
+        )
+        properties = database.get('properties', {})
+        prop = properties.get(property_name)
+        if not prop:
+            return None
+        return prop.get('type')
+
+    def ensure_select_option(self, database_id: str, property_name: str, option: Dict[str, Any]) -> bool:
+        """确保 select 属性包含指定选项（缺失时自动添加）"""
+        database = self._retry_api_call(
+            self.client.databases.retrieve,
+            database_id=database_id
+        )
+        properties = database.get('properties', {})
+        prop = properties.get(property_name)
+        if not prop or prop.get('type') != 'select':
+            return False
+        existing = prop.get('select', {}).get('options', [])
+        if any(opt.get('name') == option.get('name') for opt in existing):
+            return False
+        new_options = existing + [option]
+        self._retry_api_call(
+            self.client.databases.update,
+            database_id=database_id,
+            properties={
+                property_name: {
+                    'select': {
+                        'options': new_options
+                    }
+                }
+            }
+        )
+        return True
     def append_blocks(self, page_id: str, blocks: List[Dict]) -> List[Dict]:
         """
         向页面追加块
@@ -339,6 +395,7 @@ class NotionAdapter:
         return {
             "title": [
                 {
+                    "type": "text",
                     "text": {"content": content}
                 }
             ]
@@ -358,6 +415,7 @@ class NotionAdapter:
         return {
             "rich_text": [
                 {
+                    "type": "text",
                     "text": {"content": content}
                 }
             ]
@@ -519,7 +577,7 @@ class NotionDatabaseSchemas:
             "chat_id": {
                 "rich_text": {}
             },
-            "title": {
+            "video_title": {
                 "rich_text": {}
             },
             "sent_date": {

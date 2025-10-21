@@ -77,7 +77,7 @@ class BaseConfigProvider(ABC):
         pass
     
     @abstractmethod
-    def add_download_record(self, video_id: str, channel: str, status: str = "completed") -> bool:
+    def add_download_record(self, video_id: str, channel: str, status: str = "completed", machine_id: Optional[str] = None) -> bool:
         """添加下载记录"""
         pass
     
@@ -87,7 +87,7 @@ class BaseConfigProvider(ABC):
         pass
     
     @abstractmethod
-    def add_sent_record(self, video_id: str, chat_id: str, title: str, file_path: str) -> bool:
+    def add_sent_record(self, video_id: str, chat_id: str, title: str, file_path: str, machine_id: Optional[str] = None) -> bool:
         """添加已发送记录"""
         pass
     
@@ -242,7 +242,7 @@ class LocalConfigProvider(BaseConfigProvider):
         
         return self._download_archive
     
-    def add_download_record(self, video_id: str, channel: str, status: str = "completed") -> bool:
+    def add_download_record(self, video_id: str, channel: str, status: str = "completed", machine_id: Optional[str] = None) -> bool:
         """添加下载记录"""
         archive_file = self._get_config_value('downloader.download_archive', 'data/download_archive.txt')
         if not os.path.isabs(archive_file):
@@ -290,7 +290,7 @@ class LocalConfigProvider(BaseConfigProvider):
         
         return self._sent_archives[chat_id]
     
-    def add_sent_record(self, video_id: str, chat_id: str, title: str, file_path: str) -> bool:
+    def add_sent_record(self, video_id: str, chat_id: str, title: str, file_path: str, machine_id: Optional[str] = None) -> bool:
         """添加已发送记录"""
         # 清理 chat_id
         clean_id = str(chat_id).replace('-', '').replace('+', '')
@@ -586,7 +586,7 @@ class NotionConfigProvider(BaseConfigProvider):
             print(f"警告：从 Notion 加载下载存档失败: {e}")
             return set()
     
-    def add_download_record(self, video_id: str, channel: str, status: str = "completed") -> bool:
+    def add_download_record(self, video_id: str, channel: str, status: str = "completed", machine_id: Optional[str] = None) -> bool:
         """添加下载记录到 Notion"""
         database_id = self.config_data.get('database_ids', {}).get('download_archive')
         if not database_id:
@@ -601,9 +601,13 @@ class NotionConfigProvider(BaseConfigProvider):
                 ),
                 "status": self.adapter.build_select_property(status)
             }
-            
+
+            record_machine_id = machine_id or self.config_data.get('sync', {}).get('machine_id')
+            if record_machine_id:
+                properties["machine_id"] = self.adapter.build_text_property(record_machine_id)
+
             self.adapter.add_page_to_database(database_id, properties)
-            
+
             # 更新缓存
             if self._download_archive_cache is not None:
                 self._download_archive_cache.add(video_id)
@@ -648,7 +652,7 @@ class NotionConfigProvider(BaseConfigProvider):
             print(f"警告：从 Notion 加载已发送存档失败: {e}")
             return set()
     
-    def add_sent_record(self, video_id: str, chat_id: str, title: str, file_path: str) -> bool:
+    def add_sent_record(self, video_id: str, chat_id: str, title: str, file_path: str, machine_id: Optional[str] = None) -> bool:
         """添加已发送记录到 Notion"""
         database_id = self.config_data.get('database_ids', {}).get('sent_archive')
         if not database_id:
@@ -658,13 +662,45 @@ class NotionConfigProvider(BaseConfigProvider):
             properties = {
                 "video_id": self.adapter.build_title_property(video_id),
                 "chat_id": self.adapter.build_text_property(str(chat_id)),
-                "title": self.adapter.build_text_property(title),
                 "sent_date": self.adapter.build_date_property(
                     datetime.now(timezone.utc).isoformat()
                 ),
                 "file_path": self.adapter.build_text_property(file_path)
             }
-            
+
+            title_property_name = "video_title"
+            title_prop_type = self.adapter.get_database_property_type(database_id, title_property_name)
+
+            if title_prop_type is None:
+                try:
+                    # Ensure new property exists to avoid conflicts with legacy 'title' field.
+                    self.adapter.ensure_database_property(
+                        database_id,
+                        title_property_name,
+                        {"type": "rich_text", "rich_text": {}}
+                    )
+                    title_prop_type = self.adapter.get_database_property_type(database_id, title_property_name)
+                except Exception as ensure_exc:
+                    print(f"Warning: failed to ensure video_title property: {ensure_exc}")
+                    title_prop_type = None
+
+            if title_prop_type is None:
+                # Fallback to legacy property name for backward compatibility.
+                title_property_name = "title"
+                title_prop_type = self.adapter.get_database_property_type(database_id, title_property_name)
+
+            if title_prop_type:
+                if title_prop_type == "title":
+                    properties[title_property_name] = self.adapter.build_title_property(title)
+                else:
+                    properties[title_property_name] = self.adapter.build_text_property(title)
+            else:
+                print("Warning: no usable title property found, skipping title field write")
+
+            record_machine_id = machine_id or self.config_data.get('sync', {}).get('machine_id')
+            if record_machine_id:
+                properties["machine_id"] = self.adapter.build_text_property(record_machine_id)
+
             self.adapter.add_page_to_database(database_id, properties)
             
             # 更新缓存

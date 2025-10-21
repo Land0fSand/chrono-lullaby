@@ -66,6 +66,10 @@ class NotionSyncService:
         
         print(f"✅ Notion 同步服务已启动")
         print(f"   日志上传间隔: {self.log_upload_interval}秒")
+        if self.archive_sync_interval and self.archive_sync_interval > 0:
+            print(f"   存档同步间隔: {self.archive_sync_interval}秒")
+        else:
+            print("   存档同步间隔: 已禁用")
         print(f"   机器标识: {self.machine_id}")
     
     def stop(self):

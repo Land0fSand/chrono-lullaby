@@ -712,6 +712,37 @@ function Invoke-InitNotionCommand {
     }
 }
 
+function Invoke-UpgradeNotionSchemaCommand {
+    Write-Host "=== ChronoLullaby Notion Schema 升级 ===" -ForegroundColor Green
+    Write-Host ""
+
+    Push-Location src
+    try {
+        if ($useVenv) {
+            $pythonExe = Join-Path $projectRoot ".venv\Scripts\python.exe"
+            & $pythonExe "commands\update_notion_schema.py"
+        }
+        else {
+            poetry run python "commands\update_notion_schema.py"
+        }
+
+        $exitCode = $LASTEXITCODE
+        if ($exitCode -eq 0) {
+            Write-Host "✅ Schema 升级完成" -ForegroundColor Green
+        }
+        else {
+            Write-Host "❌ Schema 升级失败，请检查输出" -ForegroundColor Red
+        }
+    }
+    catch {
+        Write-Host "❌ 执行 Schema 升级时发生异常: $($_.Exception.Message)" -ForegroundColor Red
+    }
+    finally {
+        Pop-Location
+    }
+}
+
+
 # sync-to-notion 命令实现
 function Invoke-SyncToNotionCommand {
     Write-Host "=== ChronoLullaby 数据同步到 Notion ===" -ForegroundColor Green
@@ -1074,6 +1105,9 @@ switch ($Command.ToLower()) {
     }
     "sync-to-notion" {
         Invoke-SyncToNotionCommand
+    }
+    "upgrade-notion-schema" {
+        Invoke-UpgradeNotionSchemaCommand
     }
     "add-chtopath" {
         Add-ChToPath

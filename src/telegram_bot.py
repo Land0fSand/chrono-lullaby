@@ -130,6 +130,13 @@ async def error_callback(update, context):
     if "Conflict: terminated by other getUpdates request" in str(context.error):
         logger.warning("检测到Bot实例冲突，可能有多个Bot在运行")
         logger.info("建议使用 'ch-stop' 停止所有实例后重新启动")
+        try:
+            from notion_sync import stop_sync_service
+            stop_sync_service()
+        except Exception:
+            pass
+        logger.info("检测到冲突，当前进程将退出以避免重复运行")
+        os._exit(1)
 
 def main():
     # 增加超时设置，添加连接池配置
