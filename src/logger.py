@@ -14,6 +14,20 @@ from pathlib import Path
 from typing import Optional
 
 
+TRACE_LEVEL = 5
+TRACE = TRACE_LEVEL
+logging.addLevelName(TRACE_LEVEL, "TRACE")
+setattr(logging, "TRACE", TRACE_LEVEL)
+
+
+def _trace(self, message, *args, **kwargs):
+    if self.isEnabledFor(TRACE_LEVEL):
+        self._log(TRACE_LEVEL, message, args, **kwargs)
+
+
+logging.Logger.trace = _trace
+
+
 class JSONFormatter(logging.Formatter):
     """
     JSON 格式化器，输出 JSONL 格式的日志
@@ -90,6 +104,29 @@ class ConsoleFormatter(logging.Formatter):
             log_line += "\n" + self.formatException(record.exc_info)
         
         return log_line
+
+
+def _get_configured_log_level(default_level: int) -> int:
+    """读取配置文件中的 log.level，如果不存在则返回默认级别"""
+    try:
+        import config as config_module
+        yaml_config = config_module.load_yaml_config()
+        if not yaml_config:
+            return default_level
+
+        log_config = yaml_config.get('log') or yaml_config.get('logging')
+        if isinstance(log_config, dict):
+            level_value = log_config.get('level')
+            if isinstance(level_value, str):
+                level_name = level_value.upper()
+                if level_name == 'TRACE':
+                    return TRACE_LEVEL
+                candidate = getattr(logging, level_name, None)
+                if isinstance(candidate, int):
+                    return candidate
+    except Exception:
+        pass
+    return default_level
 
 
 class NotionLogHandler(logging.Handler):
@@ -243,54 +280,6 @@ class LoggerManager:
         logger.addHandler(notion_handler)
 
         return logger
-
-        
-        logger.setLevel(level)
-        logger.propagate = False
-        
-        # 控制台 Handler（人类可读格式）
-        if console:
-            console_handler = logging.StreamHandler(sys.stdout)
-            console_handler.setLevel(level)
-            console_handler.setFormatter(ConsoleFormatter())
-            logger.addHandler(console_handler)
-        
-        # 文件 Handler（JSONL 格式）
-        if file:
-            # 主日志文件（所有级别）
-            log_file = self.log_dir / f"{component}.log"
-            file_handler = logging.handlers.RotatingFileHandler(
-                log_file,
-                maxBytes=10 * 1024 * 1024,  # 10 MB
-                backupCount=5,
-                encoding='utf-8'
-            )
-            file_handler.setLevel(level)
-            file_handler.setFormatter(JSONFormatter())
-            logger.addHandler(file_handler)
-            
-            # 错误日志文件（仅 ERROR 及以上）
-            if separate_error_file:
-                error_file = self.log_dir / f"{component}_error.log"
-                error_handler = logging.handlers.RotatingFileHandler(
-                    error_file,
-                    maxBytes=10 * 1024 * 1024,  # 10 MB
-                    backupCount=5,
-                    encoding='utf-8'
-                )
-                error_handler.setLevel(logging.ERROR)
-                error_handler.setFormatter(JSONFormatter())
-                logger.addHandler(error_handler)
-        
-        base_component = component.split('.')[0] if component else ''
-        notion_log_type = base_component if base_component in ('downloader', 'bot') else 'error'
-        notion_handler = NotionLogHandler(notion_log_type, component or base_component or 'unknown')
-        notion_handler.setLevel(logging.NOTSET)
-        logger.addHandler(notion_handler)
-        
-        return logger
-
-
 def get_logger(component: str, **kwargs) -> logging.Logger:
     """
     便捷函数：获取指定组件的 logger
