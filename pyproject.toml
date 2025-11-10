@@ -9,10 +9,10 @@ packages = [
 ]
 
 [tool.poetry.dependencies]
-python = "^3.9"
+python = "^3.10"
 requests = "^2.31.0"
 beautifulsoup4 = "^4.12.3"
-yt-dlp = "^2025.8.22"
+yt-dlp = "^2025.10.22"
 ffmpeg-python = "^0.2.0"
 pydub = "^0.25.1"
 python-dotenv = "^1.0.1"

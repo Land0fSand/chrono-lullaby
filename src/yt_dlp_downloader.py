@@ -163,17 +163,30 @@ def dl_youtube(channels) -> None:
     """下载 YouTube 频道的音频（向后兼容的旧接口）"""
     logger.info(f"开始批量下载，共 {len(channels)} 个频道")
     
+    # 从配置读取频道间延迟
+    delay_min = get_channel_delay_min()
+    delay_max = get_channel_delay_max()
+    
     for idx, channel in enumerate(channels, 1):
         try:
-            delay = random.uniform(30, 60)
+            # 频道间延迟（如果配置了的话）
+            if delay_max > 0 and idx > 1:  # 第一个频道不延迟
+                delay = random.uniform(delay_min, delay_max)
+                log_with_context(
+                    logger,
+                    logging.INFO,
+                    f"⏳ 频道间延迟 - 处理频道 [{idx}/{len(channels)}]",
+                    channel=channel,
+                    delay_seconds=round(delay, 2)
+                )
+                time.sleep(delay)
+            
             log_with_context(
                 logger,
                 logging.INFO,
                 f"处理频道 [{idx}/{len(channels)}]",
-                channel=channel,
-                delay_seconds=round(delay, 2)
+                channel=channel
             )
-            time.sleep(delay)
             
             dl_audio_latest(channel_name=channel)
             

@@ -31,6 +31,14 @@ notion:
     log_upload_interval: 300          # 日志批量上传间隔（秒）
     archive_sync_interval: 60         # 记录同步间隔（秒）
     machine_id: "machine-1"           # 区分不同机器上传的日志
+    
+    # 自动日志清理配置（可选）
+    auto_cleanup:
+      enabled: false                  # 是否启用自动清理（默认关闭）
+      check_interval_days: 7          # 每隔 N 天检查一次
+      keep_days: 30                   # 普通日志（INFO/WARNING）保留天数
+      error_keep_days: 90             # ERROR 日志单独保留天数（默认 3 个月）
+      min_keep_days: 7                # 安全限制：最少保留 7 天
 
 log:
   level: INFO                         # 控制控制台/文件/Notion 日志级别

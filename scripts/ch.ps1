@@ -28,6 +28,8 @@ function Show-Help {
     Write-Host "  cleanup                  强制清理所有进程" -ForegroundColor White
     Write-Host "  init-notion              初始化 Notion 数据库结构" -ForegroundColor White
     Write-Host "  sync-to-notion [--data <范围>]  手动同步数据到 Notion" -ForegroundColor White
+    Write-Host "  clean-notion-logs [选项] 清理 Notion 日志数据库" -ForegroundColor White
+    Write-Host "  migrate-multiselect      将 youtube_channels 字段迁移为 multi_select" -ForegroundColor White
     Write-Host "  add-chtopath             永久添加到系统 PATH" -ForegroundColor White
     Write-Host "  help                     显示此帮助信息" -ForegroundColor White
     Write-Host ""
@@ -57,6 +59,9 @@ function Show-Help {
     Write-Host "  ch logs --list           # 列出所有日志文件" -ForegroundColor Gray
     Write-Host "  ch init-notion           # 初始化 Notion 数据库" -ForegroundColor Gray
     Write-Host "  ch sync-to-notion --data config   # 同步配置到 Notion（支持 all/archive/logs）" -ForegroundColor Gray
+    Write-Host "  ch clean-notion-logs --days 30    # 预览删除 30 天前的日志" -ForegroundColor Gray
+    Write-Host "  ch clean-notion-logs --days 30 --confirm  # 实际删除 30 天前的日志" -ForegroundColor Gray
+    Write-Host "  ch migrate-multiselect   # 迁移 youtube_channels 字段为 multi_select" -ForegroundColor Gray
     Write-Host "  ch cleanup               # 强制清理" -ForegroundColor Gray
     Write-Host "  ch add-chtopath          # 永久添加到系统 PATH" -ForegroundColor Gray
 }
@@ -828,6 +833,90 @@ function Invoke-SyncToNotionCommand {
     }
 }
 
+# migrate-multiselect 命令实现
+function Invoke-MigrateMultiselectCommand {
+    Write-Host "=== ChronoLullaby YouTube 频道字段迁移工具 ===" -ForegroundColor Green
+    Write-Host ""
+    
+    # 进入源代码目录
+    Push-Location src
+    
+    try {
+        Write-Host "🚀 正在启动字段迁移工具..." -ForegroundColor Cyan
+        Write-Host ""
+        Write-Host "此工具将把 Notion Config Database 中的 youtube_channels 字段" -ForegroundColor Yellow
+        Write-Host "从 rich_text 格式迁移到 multi_select 格式" -ForegroundColor Yellow
+        Write-Host ""
+        Write-Host "迁移后的优势：" -ForegroundColor Cyan
+        Write-Host "  ✓ 每个 YouTube 频道作为独立的选项" -ForegroundColor Green
+        Write-Host "  ✓ 可以随时添加/删除频道选项" -ForegroundColor Green
+        Write-Host "  ✓ 不需要删除频道，只需取消勾选即可" -ForegroundColor Green
+        Write-Host ""
+        Write-Host "⚠️  注意：此操作会修改 Notion 数据库结构，建议先备份" -ForegroundColor Red
+        Write-Host ""
+        
+        # 执行迁移脚本
+        & poetry run python "commands/migrate_youtube_channels_to_multiselect.py"
+        
+        $exitCode = $LASTEXITCODE
+        
+        Write-Host ""
+        if ($exitCode -eq 0) {
+            Write-Host "✅ 字段迁移成功完成！" -ForegroundColor Green
+            Write-Host ""
+            Write-Host "现在你可以在 Notion 中使用 multi_select 格式管理 YouTube 频道了" -ForegroundColor Cyan
+        }
+        else {
+            Write-Host "❌ 字段迁移失败，请检查错误信息" -ForegroundColor Red
+        }
+    }
+    catch {
+        Write-Host "❌ 执行字段迁移时发生错误: $($_.Exception.Message)" -ForegroundColor Red
+    }
+    finally {
+        Pop-Location
+    }
+}
+
+# Notion 日志清理命令实现
+function Invoke-CleanNotionLogsCommand {
+    Write-Host "=== ChronoLullaby - Notion 日志清理 ===" -ForegroundColor Green
+    Write-Host ""
+    
+    $projectRoot = $PSScriptRoot | Split-Path -Parent
+    
+    try {
+        Push-Location $projectRoot
+        
+        # 传递所有参数给 Python 脚本
+        $pythonArgs = @()
+        foreach ($arg in $Arguments) {
+            $pythonArgs += $arg
+        }
+        
+        Write-Host "执行命令: poetry run python -m src.commands.clean_notion_logs $($pythonArgs -join ' ')" -ForegroundColor Gray
+        Write-Host ""
+        
+        poetry run python -m src.commands.clean_notion_logs @pythonArgs
+        
+        $exitCode = $LASTEXITCODE
+        
+        Write-Host ""
+        if ($exitCode -eq 0) {
+            Write-Host "✅ 日志清理操作完成" -ForegroundColor Green
+        }
+        else {
+            Write-Host "❌ 日志清理失败，请检查错误信息" -ForegroundColor Red
+        }
+    }
+    catch {
+        Write-Host "❌ 执行日志清理时发生错误: $($_.Exception.Message)" -ForegroundColor Red
+    }
+    finally {
+        Pop-Location
+    }
+}
+
 # 清理命令实现
 function Invoke-CleanupCommand {
     Write-Host "=== ChronoLullaby 超级强制清理 ===" -ForegroundColor Green
@@ -1106,8 +1195,14 @@ switch ($Command.ToLower()) {
     "sync-to-notion" {
         Invoke-SyncToNotionCommand
     }
+    "migrate-multiselect" {
+        Invoke-MigrateMultiselectCommand
+    }
     "upgrade-notion-schema" {
         Invoke-UpgradeNotionSchemaCommand
+    }
+    "clean-notion-logs" {
+        Invoke-CleanNotionLogsCommand
     }
     "add-chtopath" {
         Add-ChToPath

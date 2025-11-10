@@ -166,7 +166,8 @@ def sync_config(local_provider: LocalConfigProvider, notion_provider: NotionConf
         if not page_id and name:
             page_id = existing_by_name.get(name)
 
-        youtube_text = "\n".join(ch for ch in youtube_channels if ch).strip()
+        # 使用 multi_select 格式存储 YouTube 频道列表
+        youtube_channels_clean = [ch for ch in youtube_channels if ch]
 
         properties = {
             "name": adapter.build_title_property(name or "未命名频道"),
@@ -174,7 +175,7 @@ def sync_config(local_provider: LocalConfigProvider, notion_provider: NotionConf
             "enabled": adapter.build_checkbox_property(enabled),
             "telegram_chat_id": text_prop(chat_id),
             "audio_folder": text_prop(audio_folder),
-            "youtube_channels": text_prop(youtube_text),
+            "youtube_channels": adapter.build_multi_select_property(youtube_channels_clean),
             "bot_token": text_prop(bot_token),
         }
 

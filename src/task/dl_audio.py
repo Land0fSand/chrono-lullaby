@@ -520,7 +520,7 @@ def dl_audio_latest(channel_name, audio_folder=None, group_name=None):
                 "频道视频列表获取完成",
                 channel=channel_name,
                 total_videos=stats['total'],
-                max_to_process=6
+                max_to_process=max_videos
             )
 
             for idx, video_info in enumerate(entries_to_download, 1):

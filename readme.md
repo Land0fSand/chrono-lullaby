@@ -13,6 +13,7 @@
 - 🔄 **去重机制** - 避免重复下载，自动跳过已处理的内容
 - 📊 **日志系统** - JSONL 格式日志，便于查询和分析
 - ☁️ **远程配置** - 支持 Notion 作为配置和数据存储，实现跨机器无缝切换
+- 🧹 **自动清理** - Notion 日志自动清理，保持数据库性能
 - ⚙️ **简单管理** - 统一的 `ch` 命令管理所有功能
 
 ---
@@ -74,11 +75,22 @@ pip install -r requirements.txt
 
 ### Notion 远程配置
 ```powershell
-.\ch init-notion        # 初始化 Notion 数据库结构
-.\ch sync-to-notion     # 手动同步本地数据到 Notion
+.\ch init-notion              # 初始化 Notion 数据库结构
+.\ch sync-to-notion           # 手动同步本地数据到 Notion
+.\ch migrate-multiselect      # 迁移频道配置为多选格式（仅需一次）
+.\ch clean-notion-logs --days 30 --confirm  # 清理 30 天前的日志
 ```
 
-> 📘 **Notion 配置详细指南**: [docs/NOTION_SETUP.md](docs/NOTION_SETUP.md)
+### Cookie 更新
+```powershell
+# 当遇到 403 错误时，更新 YouTube Cookies
+# 使用 Cookie-Editor 扩展导出 Netscape 格式到 config/youtube.cookies
+.\ch restart  # 重启服务生效
+```
+
+> 📘 **配置指南**: [docs/CONFIG_GUIDE.md](docs/CONFIG_GUIDE.md) | [Notion 设置](docs/NOTION_SETUP.md)  
+> 🍪 **Cookie 更新**: [docs/COOKIE_UPDATE_GUIDE.md](docs/COOKIE_UPDATE_GUIDE.md)  
+> 🧹 **日志清理**: [docs/NOTION_LOG_CLEANUP.md](docs/NOTION_LOG_CLEANUP.md)
 
 ---
 
@@ -178,9 +190,16 @@ jq 'select(.channel=="@频道名")' logs/downloader.log
 
 ## 详细文档
 
-- **[使用文档](docs/README.md)** - 完整的使用说明、日志系统、故障排查
-- **[配置指南](docs/CONFIG_GUIDE.md)** - 详细的配置说明和参数解释
-- **[/chatid 命令](docs/CHATID_COMMAND.md)** - 获取 Telegram Chat ID 的方法
+### 基础文档
+- **[使用文档](docs/README.md)** - 完整使用说明、日志系统、故障排查
+- **[配置指南](docs/CONFIG_GUIDE.md)** - 详细配置说明和参数解释
+
+### 功能指南
+- **[Notion 设置](docs/NOTION_SETUP.md)** - Notion 模式配置和使用
+- **[Notion 日志清理](docs/NOTION_LOG_CLEANUP.md)** - 日志清理和自动化方案
+- **[多选频道管理](docs/YOUTUBE_CHANNELS_MULTISELECT.md)** - 多选格式迁移和使用
+- **[Cookie 更新](docs/COOKIE_UPDATE_GUIDE.md)** - YouTube Cookies 更新方法
+- **[/chatid 命令](docs/CHATID_COMMAND.md)** - 获取 Telegram Chat ID
 
 ---
 

@@ -284,6 +284,45 @@ class NotionAdapter:
             properties=properties
         )
     
+    def archive_page(self, page_id: str) -> Dict:
+        """
+        归档（删除）页面
+        
+        Args:
+            page_id: 页面 ID
+        
+        Returns:
+            归档后的页面对象
+        """
+        return self._retry_api_call(
+            self.client.pages.update,
+            page_id=page_id,
+            archived=True
+        )
+    
+    def batch_archive_pages(self, page_ids: List[str]) -> tuple:
+        """
+        批量归档页面
+        
+        Args:
+            page_ids: 页面 ID 列表
+        
+        Returns:
+            (成功数量, 失败数量)
+        """
+        success_count = 0
+        failed_count = 0
+        
+        for page_id in page_ids:
+            try:
+                self.archive_page(page_id)
+                success_count += 1
+            except Exception as e:
+                failed_count += 1
+                print(f"归档页面失败 {page_id}: {e}")
+        
+        return success_count, failed_count
+    
     # ============================================================
     # 页面操作
     # ============================================================
@@ -570,6 +609,23 @@ class NotionAdapter:
         }
     
     @staticmethod
+    def build_multi_select_property(options: List[str]) -> Dict:
+        """
+        构建多选属性
+        
+        Args:
+            options: 选项名称列表
+        
+        Returns:
+            多选属性对象
+        """
+        return {
+            "multi_select": [
+                {"name": option} for option in options if option
+            ]
+        }
+    
+    @staticmethod
     def extract_plain_text(rich_text_array: List[Dict]) -> str:
         """
         从富文本数组提取纯文本
@@ -632,6 +688,9 @@ class NotionAdapter:
             if select_obj:
                 return select_obj.get("name")
             return None
+        elif prop_type == "multi_select":
+            multi_select_list = prop.get("multi_select", [])
+            return [item.get("name") for item in multi_select_list if item.get("name")]
         else:
             return None
 
@@ -659,7 +718,7 @@ class NotionDatabaseSchemas:
                 "rich_text": {}
             },
             "youtube_channels": {
-                "rich_text": {}
+                "multi_select": {}
             },
             "bot_token": {
                 "rich_text": {}

@@ -483,13 +483,20 @@ class NotionConfigProvider(BaseConfigProvider):
                 enabled = self.adapter.extract_property_value(page, 'enabled')
                 chat_id = self.adapter.extract_property_value(page, 'telegram_chat_id')
                 audio_folder = self.adapter.extract_property_value(page, 'audio_folder')
-                youtube_channels_str = self.adapter.extract_property_value(page, 'youtube_channels')
+                youtube_channels_data = self.adapter.extract_property_value(page, 'youtube_channels')
                 bot_token = self.adapter.extract_property_value(page, 'bot_token')
                 
-                # 解析 YouTube 频道列表（每行一个）
+                # 解析 YouTube 频道列表
+                # 支持两种格式：
+                # 1. multi_select (新格式): 返回列表
+                # 2. rich_text (旧格式): 返回字符串，需要按行分割
                 youtube_channels = []
-                if youtube_channels_str:
-                    youtube_channels = [ch.strip() for ch in youtube_channels_str.split('\n') if ch.strip()]
+                if isinstance(youtube_channels_data, list):
+                    # 新格式：multi_select，直接使用列表
+                    youtube_channels = [ch.strip() for ch in youtube_channels_data if ch and ch.strip()]
+                elif isinstance(youtube_channels_data, str):
+                    # 旧格式：rich_text，按行分割
+                    youtube_channels = [ch.strip() for ch in youtube_channels_data.split('\n') if ch.strip()]
                 
                 group = {
                     'name': name or '',
