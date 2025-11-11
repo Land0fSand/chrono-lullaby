@@ -7,6 +7,7 @@ import sys
 import time
 import logging
 import re
+import copy
 from typing import Optional
 
 # 设置默认编码为UTF-8
@@ -32,6 +33,63 @@ import random
 
 # 使用统一的日志系统
 logger = get_logger('downloader.dl_audio')
+
+
+def _resolve_js_runtime_path(raw_path: str) -> str:
+    """将用户输入的路径展开为绝对路径"""
+    return os.path.abspath(
+        os.path.expanduser(
+            os.path.expandvars(raw_path)
+        )
+    )
+
+
+def _detect_js_runtime():
+    """
+    检测可用的 JavaScript 运行时（默认为 Deno）
+    - 支持通过环境变量 YT_DLP_JS_RUNTIME=runtime_name:/path/to/bin 覆盖
+    - 默认回退到 ~/.deno/bin/deno(.exe)
+    """
+    runtime_override = os.environ.get("YT_DLP_JS_RUNTIME")
+    if runtime_override:
+        runtime_name, _, runtime_path = runtime_override.partition(':')
+        runtime_name = (runtime_name or 'deno').strip()
+        runtime_config = {runtime_name: {}}
+        runtime_path = runtime_path.strip()
+        if runtime_path:
+            resolved = _resolve_js_runtime_path(runtime_path)
+            if os.path.exists(resolved):
+                runtime_config[runtime_name]['path'] = resolved
+                logger.info(f"使用环境变量指定的 JavaScript 运行时: {runtime_name} -> {resolved}")
+            else:
+                logger.warning(f"环境变量 YT_DLP_JS_RUNTIME 指定的路径不存在: {resolved}")
+        else:
+            logger.trace(f"使用环境变量指定的 JavaScript 运行时: {runtime_name} (PATH 搜索)")
+        return runtime_config
+
+    home_dir = os.path.expanduser("~")
+    deno_binary = os.path.join(
+        home_dir,
+        ".deno",
+        "bin",
+        "deno.exe" if os.name == "nt" else "deno"
+    )
+    if os.path.exists(deno_binary):
+        logger.info(f"检测到 Deno 运行时，将用于解析 YouTube n signature: {deno_binary}")
+        return {'deno': {'path': deno_binary}}
+
+    logger.warning("未检测到可用的 JavaScript 运行时，YouTube 下载可能失败 (缺少 Deno/Node/Bun/QuickJS)")
+    return None
+
+
+JS_RUNTIME_CONFIG = _detect_js_runtime()
+
+
+def apply_js_runtime(opts: dict) -> dict:
+    """为 yt-dlp 配置注入统一的 JavaScript 运行时设置"""
+    if JS_RUNTIME_CONFIG:
+        opts['js_runtimes'] = copy.deepcopy(JS_RUNTIME_CONFIG)
+    return opts
 
 
 class TimestampedYTDLLogger:
@@ -198,33 +256,37 @@ def record_download_entry(video_id: str, channel_name: Optional[str]) -> None:
 
 def ensure_cookies_available() -> bool:
     """
-    ��ȷ cookies �ļ���ڣ��ҽ��� Notion ����Դ�����طִ浽������
+    确保 cookies 文件可用：
+    - notion 模式：每次启动都从 Notion 覆盖写入
+    - local 模式：若本地存在则直接使用，否则尝试从 Notion 拉取
     """
-    if os.path.exists(COOKIES_FILE):
-        return True
-
     try:
         provider = get_config_provider()
     except Exception as err:
-        logger.warning(f"��ȡ�����ṩ�߽���ʧ��: {err}")
-        return False
+        logger.warning(f"获取配置提供者失败: {err}")
+        provider = None
+
+    is_notion_mode = provider and provider.__class__.__name__ == "NotionConfigProvider"
+
+    if os.path.exists(COOKIES_FILE) and not is_notion_mode:
+        return True
 
     if not provider:
-        return False
+        return os.path.exists(COOKIES_FILE)
 
     fetcher = getattr(provider, "get_cookies_content", None)
     if not callable(fetcher):
-        return False
+        return os.path.exists(COOKIES_FILE)
 
     try:
         content = fetcher()
     except Exception as err:
-        logger.error(f"�� Notion ��ȡ cookies ʧ��: {err}")
-        return False
+        logger.error(f"从 Notion 获取 cookies 失败: {err}")
+        return os.path.exists(COOKIES_FILE)
 
     if not content or not content.strip():
-        logger.warning("�� Notion δ�õ����õ� cookies ����")
-        return False
+        logger.warning("从 Notion 未获取到有效 cookies 数据")
+        return os.path.exists(COOKIES_FILE)
 
     target_dir = os.path.dirname(COOKIES_FILE)
     if target_dir and not os.path.exists(target_dir):
@@ -233,11 +295,11 @@ def ensure_cookies_available() -> bool:
     try:
         with open(COOKIES_FILE, "w", encoding="utf-8") as f:
             f.write(content)
-        logger.info(f"�Ѵ� Notion ͬ�� cookies ������: {COOKIES_FILE}")
+        logger.info(f"已从 Notion 同步 cookies 至本地: {COOKIES_FILE}")
         return True
     except Exception as err:
-        logger.error(f"д�� cookies �ļ�ʧ��: {err}")
-        return False
+        logger.error(f"写入 cookies 文件失败: {err}")
+        return os.path.exists(COOKIES_FILE)
 
 
 def member_content_filter(info_dict):
@@ -354,8 +416,9 @@ def get_ydl_opts(custom_opts=None):
     # 注意：FFmpeg后处理器会替换文件扩展名，所以我们只用一个模板
     # 最终格式：filename.tmp.m4a (yt-dlp下载为filename.tmp，FFmpeg转换为filename.tmp.m4a)
     # 文件名格式：{video_id}.{title}.m4a（使用 id 而不是 uploader，便于记录和追踪）
+    base_format = "bestvideo[height<=480][vcodec!=none]+bestaudio/best"
     base_opts = {
-        "format": "bestaudio/best",
+        "format": base_format,
         "outtmpl": os.path.join(AUDIO_FOLDER, "%(id)s.%(title)s.tmp"),
         "logger": TimestampedYTDLLogger(),  # 使用自定义日志格式
         "postprocessors": [
@@ -382,6 +445,8 @@ def get_ydl_opts(custom_opts=None):
             "Sec-Fetch-Mode": "navigate",
         }
     }
+    
+    base_opts = apply_js_runtime(base_opts)
     
     if custom_opts:
         base_opts.update(custom_opts)
@@ -418,6 +483,7 @@ def get_available_format(url):
         "cookiefile": COOKIES_FILE,
         "quiet": True,
     }
+    ydl_opts = apply_js_runtime(ydl_opts)
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=False)
         formats = info.get("formats", [])
@@ -476,7 +542,15 @@ def dl_audio_latest(channel_name, audio_folder=None, group_name=None):
         'details': []
     }
     
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+    # 第一步：获取视频列表（使用测试脚本中成功的配置）
+    list_opts = {
+        "quiet": True,
+        "playlistend": max_videos,
+        "cookiefile": COOKIES_FILE,
+    }
+    list_opts = apply_js_runtime(list_opts)
+    
+    with yt_dlp.YoutubeDL(list_opts) as list_ydl:
         try:
             log_context = {
                 "channel": channel_name,
@@ -490,8 +564,28 @@ def dl_audio_latest(channel_name, audio_folder=None, group_name=None):
                 "开始获取频道视频列表",
                 **log_context
             )
-            url = f"{yt_base_url}{channel_name}"
-            channel_info = ydl.extract_info(url, download=False)
+            # YouTube频道结构变化：直接访问 /videos 页面获取视频列表
+            url = f"{yt_base_url}{channel_name}/videos"
+            logger.trace(f"访问URL: {url}")
+            channel_info = list_ydl.extract_info(url, download=False)
+            
+            # 调试：打印 channel_info 的详细信息
+            logger.info(f"[调试] channel_info 类型: {type(channel_info)}")
+            logger.info(f"[调试] channel_info 是否为 None: {channel_info is None}")
+            if channel_info:
+                logger.info(f"[调试] channel_info 键: {list(channel_info.keys())[:10]}")
+                logger.info(f"[调试] _type: {channel_info.get('_type')}")
+                logger.info(f"[调试] 是否有 entries: {'entries' in channel_info}")
+                if 'entries' in channel_info:
+                    raw_entries = channel_info.get('entries')
+                    logger.info(f"[调试] entries 类型: {type(raw_entries)}")
+                    if raw_entries:
+                        try:
+                            entries_list = list(raw_entries) if hasattr(raw_entries, '__iter__') else []
+                            logger.info(f"[调试] entries 长度: {len(entries_list)}")
+                        except Exception as e:
+                            logger.info(f"[调试] 无法转换 entries 为列表: {e}")
+            
             if not channel_info or 'entries' not in channel_info:
                 log_with_context(
                     logger, logging.WARNING,
@@ -500,18 +594,26 @@ def dl_audio_latest(channel_name, audio_folder=None, group_name=None):
                 )
                 return False
 
+            # 处理返回的视频列表
+            # 注意：不使用 extract_flat 时，entries 可能是 LazyList 或 generator
             entries_to_download = []
-            if channel_info.get('_type') == 'playlist':
-                for video_playlist_entry in channel_info.get('entries', []):
-                    if video_playlist_entry and video_playlist_entry.get('_type') == 'playlist':
-                        # 确保 entries 不为 None
-                        nested_entries = video_playlist_entry.get('entries') or []
-                        for video_in_playlist in nested_entries:
-                             if video_in_playlist: entries_to_download.append(video_in_playlist)
-                    elif video_playlist_entry:
-                        entries_to_download.append(video_playlist_entry)
-            else:
-                entries_to_download = channel_info.get('entries') or []
+            raw_entries = channel_info.get('entries') if channel_info else []
+            
+            if raw_entries:
+                # 将 entries 转换为列表（如果是 generator）
+                for idx, entry in enumerate(raw_entries[:5]):  # 只看前5个
+                    logger.info(f"[调试] Entry {idx}: type={type(entry)}, is_dict={isinstance(entry, dict)}, is_none={entry is None}")
+                    if entry:
+                        logger.info(f"[调试] Entry {idx} keys: {list(entry.keys())[:10] if isinstance(entry, dict) else 'N/A'}")
+                
+                for entry in raw_entries:
+                    if entry and isinstance(entry, dict):
+                        entries_to_download.append(entry)
+                        # 只获取 max_videos 个
+                        if len(entries_to_download) >= max_videos:
+                            break
+            
+            logger.trace(f"频道返回 {len(entries_to_download)} 个有效视频")
             
             # 记录找到的视频总数
             stats['total'] = len(entries_to_download)
@@ -524,12 +626,18 @@ def dl_audio_latest(channel_name, audio_folder=None, group_name=None):
             )
 
             for idx, video_info in enumerate(entries_to_download, 1):
-                video_url = video_info.get("webpage_url")
                 video_title = video_info.get('title', '未知标题')
                 video_id = video_info.get('id', 'unknown')
                 
+                # 使用 extract_flat 后，webpage_url 可能缺失，需要从 id 构建
+                video_url = video_info.get("webpage_url")
+                if not video_url and video_id and video_id != 'unknown':
+                    # 从 video_id 构建完整的 YouTube URL
+                    video_url = f"https://www.youtube.com/watch?v={video_id}"
+                    logger.trace(f"从 video_id 构建 URL: {video_url}")
+                
                 if not video_url:
-                    logger.trace(f"跳过条目，无URL: {video_title}")
+                    logger.trace(f"跳过条目，无URL且无ID: {video_title}")
                     stats['error'] += 1
                     stats['details'].append({
                         'index': idx,
@@ -540,7 +648,7 @@ def dl_audio_latest(channel_name, audio_folder=None, group_name=None):
                     })
                     continue
 
-                # 获取上传时间（用于日志）
+                # 获取上传时间（用于日志和过滤）
                 upload_date_str = "未知"
                 if video_info.get('timestamp'):
                     upload_dt = datetime.datetime.fromtimestamp(video_info.get('timestamp'), tz=datetime.timezone.utc)
@@ -557,6 +665,20 @@ def dl_audio_latest(channel_name, audio_folder=None, group_name=None):
                     upload_date=upload_date_str
                 )
                 
+                # 应用过滤器（日期过滤、会员内容过滤等）
+                filter_result = combined_filter(video_info)
+                if filter_result:
+                    logger.trace(f"⏭️ 跳过视频（{filter_result}）: {video_title[:40]}")
+                    stats['filtered'] += 1
+                    stats['details'].append({
+                        'index': idx,
+                        'title': video_title,
+                        'id': video_id,
+                        'status': 'filtered',
+                        'reason': filter_result
+                    })
+                    continue
+                
                 # 构建文件名：{频道名}.{video_id}.{title}.m4a
                 uploader = video_info.get('uploader') or video_info.get('channel') or channel_name or 'UnknownChannel'
                 safe_uploader = sanitize_filename(uploader)
@@ -567,9 +689,12 @@ def dl_audio_latest(channel_name, audio_folder=None, group_name=None):
                 expected_audio_ext = ".m4a"
                 final_audio_filename_stem = f"{safe_uploader}.{video_id}.{safe_title}"
                 
-                # 临时文件格式：filename.tmp.m4a (yt-dlp下载为filename.tmp，FFmpeg转换为filename.tmp.m4a)
                 temp_audio_path_without_ext = os.path.join(target_folder, final_audio_filename_stem)
                 expected_temp_audio_path = temp_audio_path_without_ext + ".tmp" + expected_audio_ext
+                possible_temp_paths = [
+                    expected_temp_audio_path,
+                    temp_audio_path_without_ext + expected_audio_ext,
+                ]
 
                 # 正式文件路径（不带 .tmp）
                 final_destination_audio_path = os.path.join(target_folder, f"{final_audio_filename_stem}{expected_audio_ext}")
@@ -624,9 +749,15 @@ def dl_audio_latest(channel_name, audio_folder=None, group_name=None):
                     with yt_dlp.YoutubeDL(current_video_ydl_opts) as video_ydl:
                         video_ydl.download([video_url]) 
                     
-                    if os.path.exists(expected_temp_audio_path):
-                        logger.trace(f"转换完成: {os.path.basename(expected_temp_audio_path)}")
-                        if safe_rename_file(expected_temp_audio_path, final_destination_audio_path):
+                    temp_audio_path = next((p for p in possible_temp_paths if os.path.exists(p)), None)
+                    if temp_audio_path:
+                        logger.trace(f"转换完成: {os.path.basename(temp_audio_path)}")
+                        if os.path.normcase(temp_audio_path) == os.path.normcase(final_destination_audio_path):
+                            rename_ok = True
+                        else:
+                            rename_ok = safe_rename_file(temp_audio_path, final_destination_audio_path)
+
+                        if rename_ok:
                             file_size_mb = os.path.getsize(final_destination_audio_path) / (1024 * 1024)
                             log_with_context(
                                 logger, logging.INFO,
@@ -643,9 +774,9 @@ def dl_audio_latest(channel_name, audio_folder=None, group_name=None):
                                 'reason': '下载成功',
                                 'size_mb': round(file_size_mb, 2)
                             })
-                            
+
                             record_download_entry(video_id, channel_name)
-                            
+
                             # 视频间延迟（如果不是最后一个视频）
                             if idx < stats['total']:
                                 video_delay_min = get_video_delay_min()
@@ -686,8 +817,8 @@ def dl_audio_latest(channel_name, audio_folder=None, group_name=None):
                                 logger.warning(f"找到原始下载文件: {potential_orig_file}，但未转换为 {expected_audio_ext}")
                                 break
                         if not original_downloaded_file_actual_ext:
-                             logger.error(f"原始下载文件也未找到 (尝试的模板: {temp_audio_path_without_ext}.*.tmp)")
-                        
+                            logger.error(f"原始下载文件也未找到 (尝试的模板: {temp_audio_path_without_ext}.*.tmp)")
+
                         stats['error'] += 1
                         stats['details'].append({
                             'index': idx,

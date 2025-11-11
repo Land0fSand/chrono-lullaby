@@ -399,7 +399,8 @@ class NotionConfigProvider(BaseConfigProvider):
         
         import yaml
         
-        for block in reversed(blocks):
+        # 从上往下遍历代码块，读取最上面的（最新的）配置
+        for block in blocks:
             if block.get('type') != 'code':
                 continue
             

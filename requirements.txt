@@ -26,4 +26,4 @@ tzdata==2025.2
 tzlocal==5.3.1
 urllib3==2.5.0
 WMI==1.5.1
-yt-dlp==2025.9.26
+yt-dlp==2025.10.22
