@@ -2,6 +2,7 @@
 import os
 import sys
 import math
+import glob
 import logging
 import ffmpeg # type: ignore
 
@@ -193,6 +194,28 @@ async def send_file(context: ContextTypes.DEFAULT_TYPE, chat_id, audio_folder) -
         
         break  # 每次任务只处理一个原始文件（或其分片）
 
+def _segment_file_paths(base_name: str, ext: str) -> list[str]:
+    """Collect generated segment files sorted by numeric suffix."""
+    pattern = f"{glob.escape(base_name)}_*{ext}"
+    segment_files = glob.glob(pattern)
+
+    def _segment_index(path: str) -> int:
+        stem = os.path.splitext(path)[0]
+        suffix = stem.rsplit('_', 1)[-1]
+        return int(suffix) if suffix.isdigit() else math.inf
+
+    return sorted(segment_files, key=_segment_index)
+
+
+def _cleanup_segment_files(base_name: str, ext: str) -> None:
+    """Remove all segment files for the given base name."""
+    for segment_path in _segment_file_paths(base_name, ext):
+        try:
+            os.remove(segment_path)
+        except OSError:
+            pass
+
+
 def _recursive_split_and_check(file_path, original_file_size_mb, num_parts_to_try, max_parts_cap, recursion_depth=0, max_recursion_depth=10):
     """
     Recursively attempts to split a file, checking segment sizes and increasing parts if needed.
@@ -268,39 +291,35 @@ def _recursive_split_and_check(file_path, original_file_size_mb, num_parts_to_tr
         # Note: FFmpeg creates files using the original base_name (not safe_base_name with %%)
         all_segments_ok = True
         max_segment_size_mb = 0
-        for i in range(num_parts_to_try):
-            segment_name = f"{base_name}_{i}{ext}"
-            if os.path.exists(segment_name) and os.path.getsize(segment_name) > 0:
-                output_segments.append(segment_name)
-                current_segment_size_mb = os.path.getsize(segment_name) / (1024 * 1024)
-                if current_segment_size_mb > max_segment_size_mb:
-                    max_segment_size_mb = current_segment_size_mb
-                if current_segment_size_mb >= 50: # Check against Telegram's hard limit
-                    log_with_context(
-                        logger, logging.WARNING,
-                        "切割段大小仍超限",
-                        segment_name=segment_name,
-                        size_mb=round(current_segment_size_mb, 2)
-                    )
-                    all_segments_ok = False
-                    break # No need to check further for this attempt
-            else:
-                logger.warning(f"预期切割段未找到或为空: {segment_name}")
+        segment_files = _segment_file_paths(base_name, ext)
+
+        if not segment_files:
+            logger.warning(f"FFmpeg 切割后未生成任何分段文件: {file_path}")
+            return []
+
+        for segment_name in segment_files:
+            size_bytes = os.path.getsize(segment_name)
+            if size_bytes <= 0:
+                logger.warning(f"切割段为空或大小为0: {segment_name}")
                 all_segments_ok = False
                 break
+            current_segment_size_mb = size_bytes / (1024 * 1024)
+            if current_segment_size_mb > max_segment_size_mb:
+                max_segment_size_mb = current_segment_size_mb
+            if current_segment_size_mb >= 50: # Check against Telegram's hard limit
+                log_with_context(
+                    logger, logging.WARNING,
+                    "切割段大小仍超限",
+                    segment_name=segment_name,
+                    size_mb=round(current_segment_size_mb, 2)
+                )
+                all_segments_ok = False
+                break # No need to check further for this attempt
+            output_segments.append(segment_name)
 
-        if not all_segments_ok or len(output_segments) != num_parts_to_try:
-            logger.info(f"当前切割尝试 ({num_parts_to_try} 段) 失败，清理临时文件并重试...")
-            for seg_file in output_segments: # output_segments might be partially filled
-                try: os.remove(seg_file) 
-                except OSError: pass
-            # Also attempt to clean any other numbered segments ffmpeg might have created
-            for i in range(num_parts_to_try + 2): # Check a bit beyond just in case
-                stale_segment = f"{base_name}_{i}{ext}"
-                if os.path.exists(stale_segment) and stale_segment not in output_segments: # Avoid deleting what might be kept if logic changes
-                    try: os.remove(stale_segment)
-                    except OSError: pass 
-            
+        if not all_segments_ok:
+            logger.info(f"当前切割尝试 (目标 {num_parts_to_try} 段) 失败，清理临时文件并重试...")
+            _cleanup_segment_files(base_name, ext)
             return _recursive_split_and_check(file_path, original_file_size_mb, num_parts_to_try + 1, max_parts_cap, recursion_depth + 1, max_recursion_depth)
         
         log_with_context(
@@ -308,6 +327,7 @@ def _recursive_split_and_check(file_path, original_file_size_mb, num_parts_to_tr
             "文件切割成功",
             file_name=os.path.basename(file_path),
             segments_count=len(output_segments),
+            target_segments=num_parts_to_try,
             max_segment_size_mb=round(max_segment_size_mb, 2)
         )
         return output_segments
@@ -320,11 +340,7 @@ def _recursive_split_and_check(file_path, original_file_size_mb, num_parts_to_tr
             error=e.stderr.decode('utf8', errors='ignore') if e.stderr else 'N/A'
         )
         # Cleanup on ffmpeg error (use original base_name for cleanup)
-        for i in range(num_parts_to_try + 2):
-            segment_name = f"{base_name}_{i}{ext}"
-            if os.path.exists(segment_name):
-                try: os.remove(segment_name)
-                except OSError: pass
+        _cleanup_segment_files(base_name, ext)
         return [] # Indicate failure for this path
     except Exception as e:
         log_with_context(
@@ -335,11 +351,7 @@ def _recursive_split_and_check(file_path, original_file_size_mb, num_parts_to_tr
             error_type=type(e).__name__
         )
         # Cleanup on exception (use original base_name for cleanup)
-        for i in range(num_parts_to_try + 2):
-            segment_name = f"{base_name}_{i}{ext}"
-            if os.path.exists(segment_name):
-                try: os.remove(segment_name)
-                except OSError: pass
+        _cleanup_segment_files(base_name, ext)
         return []
 
 async def send_single_file(context: ContextTypes.DEFAULT_TYPE, chat_id, file_path):
