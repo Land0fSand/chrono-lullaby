@@ -569,22 +569,6 @@ def dl_audio_latest(channel_name, audio_folder=None, group_name=None):
             logger.trace(f"访问URL: {url}")
             channel_info = list_ydl.extract_info(url, download=False)
             
-            # 调试：打印 channel_info 的详细信息
-            logger.info(f"[调试] channel_info 类型: {type(channel_info)}")
-            logger.info(f"[调试] channel_info 是否为 None: {channel_info is None}")
-            if channel_info:
-                logger.info(f"[调试] channel_info 键: {list(channel_info.keys())[:10]}")
-                logger.info(f"[调试] _type: {channel_info.get('_type')}")
-                logger.info(f"[调试] 是否有 entries: {'entries' in channel_info}")
-                if 'entries' in channel_info:
-                    raw_entries = channel_info.get('entries')
-                    logger.info(f"[调试] entries 类型: {type(raw_entries)}")
-                    if raw_entries:
-                        try:
-                            entries_list = list(raw_entries) if hasattr(raw_entries, '__iter__') else []
-                            logger.info(f"[调试] entries 长度: {len(entries_list)}")
-                        except Exception as e:
-                            logger.info(f"[调试] 无法转换 entries 为列表: {e}")
             
             if not channel_info or 'entries' not in channel_info:
                 log_with_context(
@@ -600,12 +584,7 @@ def dl_audio_latest(channel_name, audio_folder=None, group_name=None):
             raw_entries = channel_info.get('entries') if channel_info else []
             
             if raw_entries:
-                # 将 entries 转换为列表（如果是 generator）
-                for idx, entry in enumerate(raw_entries[:5]):  # 只看前5个
-                    logger.info(f"[调试] Entry {idx}: type={type(entry)}, is_dict={isinstance(entry, dict)}, is_none={entry is None}")
-                    if entry:
-                        logger.info(f"[调试] Entry {idx} keys: {list(entry.keys())[:10] if isinstance(entry, dict) else 'N/A'}")
-                
+                # 遍历 entries（可能是 generator）以筛选有效条目
                 for entry in raw_entries:
                     if entry and isinstance(entry, dict):
                         entries_to_download.append(entry)

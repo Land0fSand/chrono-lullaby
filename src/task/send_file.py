@@ -5,6 +5,7 @@ import math
 import glob
 import logging
 import ffmpeg # type: ignore
+from typing import Optional
 
 # 设置默认编码为UTF-8
 if sys.stdout.encoding != 'utf-8':
@@ -111,7 +112,12 @@ def record_sent_file(chat_id: str, video_id: str, title: str, channel_name: str 
         )
 
 
-async def send_file(context: ContextTypes.DEFAULT_TYPE, chat_id, audio_folder) -> None:
+async def send_file(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id,
+    audio_folder,
+    group_name: Optional[str] = None,
+) -> None:
     if not os.path.exists(audio_folder):
         logger.warning(f"音频文件夹不存在: {audio_folder}")
         return
@@ -133,7 +139,12 @@ async def send_file(context: ContextTypes.DEFAULT_TYPE, chat_id, audio_folder) -
         if '_' in os.path.splitext(file_name)[0] and os.path.splitext(file_name)[0].split('_')[-1].isdigit():
             logger.info(f"跳过已分段文件: {file_name}")
             # We will send these individual segments directly if they are valid
-            await send_single_file(context, chat_id, file_path)
+            await send_single_file(
+                context,
+                chat_id,
+                file_path,
+                group_name=group_name,
+            )
             os.remove(file_path) # Remove after attempting to send
             continue # Move to the next file in the directory
 
@@ -171,7 +182,12 @@ async def send_file(context: ContextTypes.DEFAULT_TYPE, chat_id, audio_folder) -
                     parts_count=len(split_files)
                 )
                 for split_file_path in split_files:
-                    await send_single_file(context, chat_id, split_file_path)
+                    await send_single_file(
+                        context,
+                        chat_id,
+                        split_file_path,
+                        group_name=group_name,
+                    )
                     try:
                         os.remove(split_file_path)  # 发送后删除临时文件
                         logger.trace(f"已删除切割文件: {split_file_path}")
@@ -185,7 +201,12 @@ async def send_file(context: ContextTypes.DEFAULT_TYPE, chat_id, audio_folder) -
             else:
                 logger.error(f"文件切割失败或超出重试次数，跳过: {file_name}")
         else:
-            await send_single_file(context, chat_id, file_path)
+            await send_single_file(
+                context,
+                chat_id,
+                file_path,
+                group_name=group_name,
+            )
             try:
                 os.remove(file_path)  # 发送后删除文件
                 logger.info(f"已删除文件: {file_path}")
@@ -354,7 +375,12 @@ def _recursive_split_and_check(file_path, original_file_size_mb, num_parts_to_tr
         _cleanup_segment_files(base_name, ext)
         return []
 
-async def send_single_file(context: ContextTypes.DEFAULT_TYPE, chat_id, file_path):
+async def send_single_file(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id,
+    file_path,
+    group_name: Optional[str] = None,
+):
     """
     发送单个文件到指定的聊天
     """
@@ -403,11 +429,15 @@ async def send_single_file(context: ContextTypes.DEFAULT_TYPE, chat_id, file_pat
         # 记录已发送的文件（包含频道名）
         record_sent_file(chat_id, video_id, base_title, channel_name)
         
+        group_label = group_name or str(chat_id)
         log_with_context(
-            logger, logging.INFO,
-            "文件发送成功",
-            file_name=os.path.basename(file_path),
-            video_id=video_id
+            logger,
+            logging.INFO,
+            f"频道组 {group_label} 发送音频《{title}》",
+            telegram_chat_id=chat_id,
+            youtube_channel=channel_name,
+            video_id=video_id,
+            audio_title=title,
         )
     except TelegramError as te:
         log_with_context(

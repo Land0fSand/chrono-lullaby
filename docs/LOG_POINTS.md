@@ -123,7 +123,7 @@ ChronoLullaby 的日志系统分为两大类：
 | "❌ 未找到 CHAT_ID 配置！" | 启动时未找到ChatID配置 | ERROR | chronolullaby.bot | src/telegram_bot.py:47 |
 | "请在 config.yaml 或 .env 文件中配置 CHAT_ID" | 启动时未找到ChatID配置 | ERROR | chronolullaby.bot | src/telegram_bot.py:48 |
 | "配置加载成功：发送间隔 = {SEND_INTERVAL} 秒 ({SEND_INTERVAL/3600:.2f} 小时)" | 启动时配置加载成功 | INFO | chronolullaby.bot | src/telegram_bot.py:51 |
-| "执行发送任务 - 频道组: {group_name}" | 执行发送任务时 | INFO | chronolullaby.bot | src/telegram_bot.py:67 |
+| "频道组 {group_name_or_chat_id} 发送音频《{audio_title}》" | 音频发送成功时 | INFO | chronolullaby.bot.send_file | src/task/send_file.py:436 |
 | "发送文件任务错误 (频道组: {group_name}): {e}" | 发送任务出错时 | ERROR | chronolullaby.bot | src/telegram_bot.py:70 |
 | "发送文件任务错误: {e}" | 发送任务出错时 | ERROR | chronolullaby.bot | src/telegram_bot.py:79 |
 | "🧪 /test 命令 - Chat ID: {chat_id}, 类型: {chat_type}, 标题: {chat_title}" | /test命令执行时 | INFO | chronolullaby.bot | src/telegram_bot.py:100 |

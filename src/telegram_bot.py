@@ -64,8 +64,12 @@ def create_send_file_task(chat_id: str, audio_folder: str, group_name: str):
     """
     async def send_file_task(context: ContextTypes.DEFAULT_TYPE) -> None:
         try:
-            logger.info(f"执行发送任务 - 频道组: {group_name}")
-            await send_file(context=context, chat_id=chat_id, audio_folder=audio_folder)
+            await send_file(
+                context=context,
+                chat_id=chat_id,
+                audio_folder=audio_folder,
+                group_name=group_name,
+            )
         except Exception as e:
             logger.error(f"发送文件任务错误 (频道组: {group_name}): {e}")
     
@@ -252,4 +256,4 @@ def main():
             raise
 
 if __name__ == "__main__":
-    main() 
+    main()
