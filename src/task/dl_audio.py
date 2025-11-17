@@ -235,21 +235,21 @@ def record_download_entry(video_id: str, channel_name: Optional[str]) -> None:
                     logger, TRACE_LEVEL,
                     "�Ѽ�¼����浵",
                     video_id=video_id,
-                    channel=channel_name
+                    yt_channel=channel_name
                 )
             else:
                 log_with_context(
                     logger, logging.WARNING,
                     "��¼����浵ʧ��",
                     video_id=video_id,
-                    channel=channel_name
+                    yt_channel=channel_name
                 )
     except Exception as err:
         log_with_context(
             logger, logging.ERROR,
             "��¼����浵����",
             video_id=video_id,
-            channel=channel_name,
+            yt_channel=channel_name,
             error=str(err)
         )
 
@@ -553,11 +553,10 @@ def dl_audio_latest(channel_name, audio_folder=None, group_name=None):
     with yt_dlp.YoutubeDL(list_opts) as list_ydl:
         try:
             log_context = {
-                "channel": channel_name,
-                "audio_folder": target_folder
+                "yt_channel": channel_name,
             }
             if group_name:
-                log_context["group"] = group_name
+                log_context["tg_channel"] = group_name
             
             log_with_context(
                 logger, logging.INFO,
@@ -574,7 +573,7 @@ def dl_audio_latest(channel_name, audio_folder=None, group_name=None):
                 log_with_context(
                     logger, logging.WARNING,
                     "频道未找到视频或信息不完整",
-                    channel=channel_name
+                    yt_channel=channel_name
                 )
                 return False
 
@@ -599,7 +598,7 @@ def dl_audio_latest(channel_name, audio_folder=None, group_name=None):
             log_with_context(
                 logger, logging.INFO,
                 "频道视频列表获取完成",
-                channel=channel_name,
+                yt_channel=channel_name,
                 total_videos=stats['total'],
                 max_to_process=max_videos
             )
@@ -639,7 +638,7 @@ def dl_audio_latest(channel_name, audio_folder=None, group_name=None):
                 log_with_context(
                     logger, TRACE_LEVEL,
                     f"检查视频 [{idx}/{stats['total']}] {video_id}",
-                    channel=channel_name,
+                    yt_channel=channel_name,
                     title=video_title[:60] + "..." if len(video_title) > 60 else video_title,
                     upload_date=upload_date_str
                 )
@@ -682,7 +681,7 @@ def dl_audio_latest(channel_name, audio_folder=None, group_name=None):
                     log_with_context(
                         logger, logging.INFO,
                         f"⏭️  跳过 {video_id} (文件已存在)",
-                        channel=channel_name
+                        yt_channel=channel_name
                     )
                     stats['already_exists'] += 1
                     stats['details'].append({
@@ -712,7 +711,7 @@ def dl_audio_latest(channel_name, audio_folder=None, group_name=None):
                     log_with_context(
                         logger, TRACE_LEVEL,
                         f"⏭️ 跳过 {video_id} ({filter_result})",
-                        channel=channel_name
+                        yt_channel=channel_name
                     )
                     stats['filtered'] += 1
                     stats['details'].append({
@@ -741,7 +740,7 @@ def dl_audio_latest(channel_name, audio_folder=None, group_name=None):
                             log_with_context(
                                 logger, logging.INFO,
                                 f"✅ 下载成功 {video_id}",
-                                channel=channel_name,
+                                yt_channel=channel_name,
                                 size_mb=round(file_size_mb, 2)
                             )
                             stats['success'] += 1
@@ -765,14 +764,14 @@ def dl_audio_latest(channel_name, audio_folder=None, group_name=None):
                                     log_with_context(
                                         logger, logging.INFO,
                                         f"⏳ 等待 {round(delay)}秒",
-                                        channel=channel_name
+                                        yt_channel=channel_name
                                     )
                                     time.sleep(delay)
                         else:
                             log_with_context(
                                 logger, logging.ERROR,
                                 f"❌ 重命名失败 {video_id}",
-                                channel=channel_name
+                                yt_channel=channel_name
                             )
                             stats['error'] += 1
                             stats['details'].append({
@@ -786,7 +785,7 @@ def dl_audio_latest(channel_name, audio_folder=None, group_name=None):
                         log_with_context(
                             logger, logging.ERROR,
                             f"❌ 转换失败 {video_id} (文件未找到)",
-                            channel=channel_name
+                            yt_channel=channel_name
                         )
                         original_downloaded_file_actual_ext = None
                         for ext_try in ['.webm', '.mp4', '.mkv', '.flv', '.avi', '.mov', '.opus', '.ogg', '.mp3']:
@@ -813,7 +812,7 @@ def dl_audio_latest(channel_name, audio_folder=None, group_name=None):
                         log_with_context(
                             logger, logging.INFO,
                             "视频已在存档中记录，跳过",
-                            channel=channel_name,
+                            yt_channel=channel_name,
                             video_index=f"{idx}/{stats['total']}",
                             title=video_title,
                             video_id=video_id
@@ -830,7 +829,7 @@ def dl_audio_latest(channel_name, audio_folder=None, group_name=None):
                         log_with_context(
                             logger, logging.INFO,
                             f"🔒 会员专属 {video_id} (下载被拒绝)",
-                            channel=channel_name
+                            yt_channel=channel_name
                         )
                         stats['member_only'] += 1
                         stats['details'].append({
@@ -846,7 +845,7 @@ def dl_audio_latest(channel_name, audio_folder=None, group_name=None):
                         log_with_context(
                             logger, logging.INFO,
                             f"⏰ 待首映 {video_id}",
-                            channel=channel_name,
+                            yt_channel=channel_name,
                             premiere_info=premiere_info
                         )
                         stats['filtered'] += 1
@@ -863,7 +862,7 @@ def dl_audio_latest(channel_name, audio_folder=None, group_name=None):
                         log_with_context(
                             logger, logging.ERROR,
                             f"❌ 下载失败 {video_id}",
-                            channel=channel_name,
+                            yt_channel=channel_name,
                             error=error_msg
                         )
                         stats['error'] += 1
@@ -893,7 +892,7 @@ def dl_audio_latest(channel_name, audio_folder=None, group_name=None):
                     log_with_context(
                         logger, logging.ERROR,
                         f"❌ 未知错误 {video_id}",
-                        channel=channel_name,
+                        yt_channel=channel_name,
                         error_type=type(e).__name__,
                         error=error_msg
                     )
@@ -911,7 +910,7 @@ def dl_audio_latest(channel_name, audio_folder=None, group_name=None):
             log_with_context(
                 logger, logging.INFO,
                 f"✅ 频道处理完成",
-                channel=channel_name,
+                yt_channel=channel_name,
                 total_videos=stats['total'],
                 success=stats['success'],
                 already_exists=stats['already_exists'],
@@ -943,9 +942,11 @@ def dl_audio_latest(channel_name, audio_folder=None, group_name=None):
             if ("members-only" in error_str.lower() or 
                 ("member" in error_str.lower() and "join this channel" in error_str.lower())):
                 log_with_context(
-                    logger, logging.INFO,
-                    f"⏭️ 频道当前视频为会员专属，跳过",
-                    channel=channel_name
+                    logger, TRACE_LEVEL,
+                    f"⏭️ 频道当前视频《{video_title}》为会员专属，跳过",
+                    yt_channel=channel_name,
+                    video_title=video_title,
+                    video_id=video_id
                 )
                 return True  # 不算错误，只是暂时没有可下载内容
             
@@ -955,7 +956,7 @@ def dl_audio_latest(channel_name, audio_folder=None, group_name=None):
             log_with_context(
                 logger, logging.ERROR,
                 f"❌ 处理频道失败",
-                channel=channel_name,
+                yt_channel=channel_name,
                 error_type=error_type,
                 error=error_msg
             )
@@ -1012,7 +1013,7 @@ def dl_audio_closest_after(au_folder, channel_name, target_timestamp=None):
     log_with_context(
         logger, logging.INFO,
         "开始处理频道历史视频",
-        channel=channel_name
+        yt_channel=channel_name
     )
     if not check_cookies():
         return False
@@ -1151,7 +1152,7 @@ def dl_audio_closest_after(au_folder, channel_name, target_timestamp=None):
             log_with_context(
                 logger, logging.ERROR,
                 "处理历史视频时发生错误",
-                channel=channel_name,
+                yt_channel=channel_name,
                 error=str(e)
             )
             return False
@@ -1173,7 +1174,7 @@ def read_and_process_channels(channels_file_path, au_folder):
         log_with_context(
             logger, logging.INFO,
             "Processing channel",
-            channel=channel_name,
+            yt_channel=channel_name,
             timestamp=timestamp
         )
         dl_audio_closest_after(AUDIO_FOLDER, channel_name, timestamp)

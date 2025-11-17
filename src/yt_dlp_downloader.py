@@ -125,8 +125,8 @@ def dl_youtube_multi_groups(channel_groups) -> None:
                     logger,
                     logging.INFO,
                     f"⏳ 频道间延迟 - 准备处理频道 [{idx}/{total_channels}]",
-                    group=group_name,
-                    channel=channel,
+                    tg_channel=group_name,
+                    yt_channel=channel,
                     delay_seconds=round(delay, 2)
                 )
                 time.sleep(delay)
@@ -135,8 +135,8 @@ def dl_youtube_multi_groups(channel_groups) -> None:
                 logger,
                 logging.INFO,
                 f"处理频道 [{idx}/{total_channels}]",
-                group=group_name,
-                channel=channel
+                tg_channel=group_name,
+                yt_channel=channel
             )
             
             dl_audio_latest(
@@ -150,8 +150,8 @@ def dl_youtube_multi_groups(channel_groups) -> None:
                 logger,
                 logging.ERROR,
                 f"下载频道失败",
-                group=group_name,
-                channel=channel,
+                tg_channel=group_name,
+                yt_channel=channel,
                 error=str(e),
                 error_type=type(e).__name__
             )
@@ -176,7 +176,7 @@ def dl_youtube(channels) -> None:
                     logger,
                     logging.INFO,
                     f"⏳ 频道间延迟 - 处理频道 [{idx}/{len(channels)}]",
-                    channel=channel,
+                    yt_channel=channel,
                     delay_seconds=round(delay, 2)
                 )
                 time.sleep(delay)
@@ -185,7 +185,7 @@ def dl_youtube(channels) -> None:
                 logger,
                 logging.INFO,
                 f"处理频道 [{idx}/{len(channels)}]",
-                channel=channel
+                yt_channel=channel
             )
             
             dl_audio_latest(channel_name=channel)
@@ -195,7 +195,7 @@ def dl_youtube(channels) -> None:
                 logger,
                 logging.ERROR,
                 f"下载频道失败",
-                channel=channel,
+                yt_channel=channel,
                 error=str(e),
                 error_type=type(e).__name__
             )
