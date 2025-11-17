@@ -35,6 +35,61 @@ import random
 logger = get_logger('downloader.dl_audio')
 
 
+_download_archive_cache = {
+    "mtime": None,
+    "entries": set(),
+}
+
+
+def _load_download_archive() -> set:
+    """
+    读取 download archive 并缓存结果，避免每次都重新加载大文件
+    """
+    path = DOWNLOAD_ARCHIVE
+    if not path:
+        return set()
+    video_title = None  # 用于异常分支的安全引用
+    video_id = None
+    try:
+        current_mtime = os.path.getmtime(path)
+    except (FileNotFoundError, OSError):
+        return set()
+
+    cached_mtime = _download_archive_cache.get("mtime")
+    if cached_mtime == current_mtime:
+        return _download_archive_cache.get("entries", set())
+
+    entries = set()
+    try:
+        with open(path, "r", encoding="utf-8") as archive_file:
+            for line in archive_file:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                parts = line.split()
+                if not parts:
+                    continue
+                video_id = parts[-1]
+                entries.add(video_id)
+    except Exception:
+        # 出现异常时不更新缓存，避免使用不完整数据
+        return _download_archive_cache.get("entries", set())
+
+    _download_archive_cache["mtime"] = current_mtime
+    _download_archive_cache["entries"] = entries
+    return entries
+
+
+def is_video_in_download_archive(video_id: str) -> bool:
+    """
+    判断指定视频 ID 是否已经记录在 download archive 中
+    """
+    if not video_id:
+        return False
+    entries = _load_download_archive()
+    return video_id in entries
+
+
 def _resolve_js_runtime_path(raw_path: str) -> str:
     """将用户输入的路径展开为绝对路径"""
     return os.path.abspath(
@@ -338,13 +393,11 @@ def combined_filter(info_dict):
         # 先检查会员内容过滤
         member_result = member_content_filter(info_dict)
         if member_result:
-            logger.trace(f"过滤器跳过: {info_dict.get('title', '未知标题')} - {member_result}")
             return member_result
 
         # 再检查时间过滤
         time_result = oneday_filter(info_dict)
         if time_result:
-            logger.trace(f"过滤器跳过: {info_dict.get('title', '未知标题')} - {time_result}")
             return time_result
 
         return None
@@ -455,22 +508,7 @@ def get_ydl_opts(custom_opts=None):
 
 
 def progress_hook(d):
-    if d['status'] == 'downloading':
-        try:
-            total = d.get('total_bytes') or d.get('total_bytes_estimate', 0)
-            downloaded = d.get('downloaded_bytes', 0)
-            if total > 0:
-                percent = (downloaded / total) * 100
-                speed = d.get('speed', 0)
-                if speed:
-                    speed_mb = speed / 1024 / 1024
-                    # 进度信息使用 DEBUG 级别，避免日志过多
-                    logger.trace(f"下载进度: {percent:.1f}% - {speed_mb:.1f}MB/s")
-                else:
-                    logger.trace(f"下载进度: {percent:.1f}%")
-        except Exception:
-            pass
-    elif d['status'] == 'finished':
+    if d['status'] == 'finished':
         logger.trace(f"下载完成: {os.path.basename(d.get('filename', ''))}")
     elif d['status'] == 'already_downloaded':
         logger.trace(f"已存在: {d.get('title', '')}")
@@ -565,7 +603,6 @@ def dl_audio_latest(channel_name, audio_folder=None, group_name=None):
             )
             # YouTube频道结构变化：直接访问 /videos 页面获取视频列表
             url = f"{yt_base_url}{channel_name}/videos"
-            logger.trace(f"访问URL: {url}")
             channel_info = list_ydl.extract_info(url, download=False)
             
             
@@ -690,6 +727,17 @@ def dl_audio_latest(channel_name, audio_folder=None, group_name=None):
                         'id': video_id,
                         'status': 'already_exists',
                         'reason': '文件已存在'
+                    })
+                    continue
+
+                if is_video_in_download_archive(video_id):
+                    stats['archived'] += 1
+                    stats['details'].append({
+                        'index': idx,
+                        'title': video_title,
+                        'id': video_id,
+                        'status': 'archived',
+                        'reason': 'archive_hit_no_file'
                     })
                     continue
                 
@@ -913,12 +961,11 @@ def dl_audio_latest(channel_name, audio_folder=None, group_name=None):
                 yt_channel=channel_name,
                 total_videos=stats['total'],
                 success=stats['success'],
-                already_exists=stats['already_exists'],
                 filtered=stats['filtered'],
+                already_exists=stats['already_exists'],
                 archived=stats['archived'],
                 member_only=stats['member_only'],
-                error=stats['error'],
-                success_rate=f"{round(stats['success'] / max(stats['total'], 1) * 100, 1)}%"
+                error=stats['error']
             )
             
             # 详细列表信息已通过每个视频的独立日志输出，此处不再重复输出
@@ -941,12 +988,14 @@ def dl_audio_latest(channel_name, audio_folder=None, group_name=None):
             # 检查是否为会员专属内容错误（频道视频都是会员内容时会在获取列表阶段就报错）
             if ("members-only" in error_str.lower() or 
                 ("member" in error_str.lower() and "join this channel" in error_str.lower())):
+                safe_title = video_title or "未知标题"
+                safe_id = video_id or "unknown"
                 log_with_context(
                     logger, TRACE_LEVEL,
-                    f"⏭️ 频道当前视频《{video_title}》为会员专属，跳过",
+                    f"⏭️ 频道当前视频《{safe_title}》为会员专属，跳过",
                     yt_channel=channel_name,
-                    video_title=video_title,
-                    video_id=video_id
+                    video_title=safe_title,
+                    video_id=safe_id
                 )
                 return True  # 不算错误，只是暂时没有可下载内容
             

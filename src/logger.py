@@ -305,7 +305,7 @@ class LoggerManager:
             logger.addHandler(self.aggregate_handler)
 
         base_component = component.split('.')[0] if component else ''
-        notion_log_type = base_component if base_component in ('downloader', 'bot') else 'error'
+        notion_log_type = base_component if base_component in ('downloader', 'bot') else 'system'
         notion_handler = NotionLogHandler(notion_log_type, component or base_component or 'unknown')
         notion_handler.setLevel(logging.NOTSET)
         logger.addHandler(notion_handler)
