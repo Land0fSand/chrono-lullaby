@@ -195,6 +195,7 @@ class LoggerManager:
     
     _instance = None
     _initialized = False
+    aggregate_handler: Optional[logging.Handler] = None
     
     def __new__(cls):
         if cls._instance is None:
@@ -205,7 +206,33 @@ class LoggerManager:
         if not self._initialized:
             self.log_dir = Path(__file__).parent.parent / "logs"
             self.log_dir.mkdir(exist_ok=True)
+            self.aggregate_handler = self._create_aggregate_handler()
             LoggerManager._initialized = True
+        else:
+            if not hasattr(self, "aggregate_handler") or self.aggregate_handler is None:
+                self.aggregate_handler = self._create_aggregate_handler()
+
+    def _create_aggregate_handler(self) -> Optional[logging.Handler]:
+        """
+        创建一个全局日志 Handler，聚合所有组件的 INFO+ 级别日志
+        """
+        try:
+            log_file = self.log_dir / "all.log"
+            handler = logging.handlers.RotatingFileHandler(
+                log_file,
+                maxBytes=20 * 1024 * 1024,  # 20 MB
+                backupCount=10,
+                encoding='utf-8'
+            )
+            handler.setLevel(logging.INFO)
+            handler.setFormatter(JSONFormatter())
+            return handler
+        except Exception as exc:
+            print(
+                f"[LoggerManager] Failed to initialize aggregate log handler: {exc}",
+                file=sys.stderr
+            )
+            return None
     
     def get_logger(
         self,
@@ -272,6 +299,10 @@ class LoggerManager:
                 error_handler.setLevel(logging.ERROR)
                 error_handler.setFormatter(JSONFormatter())
                 logger.addHandler(error_handler)
+
+        # 增加统一聚合日志，便于本地汇总检索
+        if self.aggregate_handler and self.aggregate_handler not in logger.handlers:
+            logger.addHandler(self.aggregate_handler)
 
         base_component = component.split('.')[0] if component else ''
         notion_log_type = base_component if base_component in ('downloader', 'bot') else 'error'

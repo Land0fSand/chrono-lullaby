@@ -20,6 +20,7 @@ ChronoLullaby 的日志系统分为两大类：
    - `bot.send_file.log` - 文件发送详细日志
    - `downloader.dl_audio.log` - 音频下载详细日志
    - `downloader.yt-dlp.log` - yt-dlp 输出日志
+   - `all.log` - 汇总所有组件 INFO 级及以上的业务日志，便于本地检索
    - 部分日志会同步到 Notion（如果配置了 Notion 模式）
 
 2. **系统日志**：记录系统级事件和调试信息（**本文档新增**）
