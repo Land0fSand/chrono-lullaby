@@ -1227,3 +1227,193 @@ def read_and_process_channels(channels_file_path, au_folder):
             timestamp=timestamp
         )
         dl_audio_closest_after(AUDIO_FOLDER, channel_name, timestamp)
+
+# ===== Story download helpers =====
+
+def _extract_timestamp_from_entry(entry: dict) -> Optional[int]:
+    """Extract upload timestamp (UTC seconds) from yt-dlp entry."""
+    if not entry:
+        return None
+    ts = entry.get("timestamp")
+    if ts is not None:
+        return ts
+    upload_date = entry.get("upload_date")
+    if upload_date:
+        try:
+            naive = datetime.datetime.strptime(upload_date, "%Y%m%d")
+            return int(naive.replace(tzinfo=datetime.timezone.utc).timestamp())
+        except Exception:
+            return None
+    return None
+
+
+def dl_audio_story(channel_name: str, audio_folder: str, group_name: str, items_per_run: int = 1) -> bool:
+    """Download next batch for story-type channels (oldest to newest)."""
+    if not check_cookies():
+        return False
+
+    target_folder = audio_folder if audio_folder else AUDIO_FOLDER
+    os.makedirs(target_folder, exist_ok=True)
+
+    provider = get_config_provider()
+    progress: dict = {}
+    try:
+        progress = provider.get_story_progress(group_name) or {}
+    except Exception as err:
+        logger.warning(f"读取故事进度失败: {err}")
+        progress = {}
+
+    last_video_id = progress.get("last_video_id")
+    last_ts = progress.get("last_timestamp")
+    run_started_ts = time.time()
+
+    list_opts = {
+        "quiet": True,
+        "cookiefile": COOKIES_FILE,
+        "playlistreverse": True,
+    }
+    list_opts = apply_js_runtime(list_opts)
+
+    story_url = f"{yt_base_url}{channel_name}/videos?view=0&sort=da"
+    try:
+        with yt_dlp.YoutubeDL(list_opts) as list_ydl:
+            info_dict = list_ydl.extract_info(story_url, download=False)
+    except Exception as e:
+        log_with_context(
+            logger, logging.ERROR,
+            "获取故事视频列表失败",
+            yt_channel=channel_name,
+            error=str(e)
+        )
+        return False
+
+    entries = info_dict.get("entries") or []
+    flat_entries = []
+    for entry in entries:
+        if entry and entry.get("_type") == "playlist":
+            nested = entry.get("entries") or []
+            for sub in nested:
+                if sub:
+                    flat_entries.append(sub)
+        elif entry:
+            flat_entries.append(entry)
+
+    if not flat_entries:
+        logger.info(f"故事模式频道 {channel_name} 未找到视频")
+        return False
+
+    selected = []
+    started = not (last_video_id or last_ts)
+    for entry in flat_entries:
+        video_id = entry.get("id")
+        ts = _extract_timestamp_from_entry(entry)
+        if not started:
+            if last_video_id and video_id == last_video_id:
+                started = True
+                continue
+            if last_ts and ts and ts <= last_ts:
+                continue
+        if started:
+            selected.append(entry)
+            if len(selected) >= max(1, items_per_run):
+                break
+
+    if not selected:
+        selected = flat_entries[:max(1, items_per_run)]
+        logger.warning(
+            f"故事进度未命中，频道 {channel_name} 从头开始取 {len(selected)} 条"
+        )
+
+    last_progress_id = None
+    last_progress_ts = None
+    downloaded = 0
+
+    for entry in selected:
+        video_id = entry.get("id") or ""
+        if not video_id:
+            continue
+        video_url = entry.get("webpage_url") or entry.get("url") or f"{yt_base_url}watch?v={video_id}"
+        uploader = entry.get("uploader") or entry.get("channel") or channel_name or "UnknownChannel"
+        safe_uploader = sanitize_filename(uploader)
+        title = entry.get("fulltitle") or entry.get("title") or video_id
+        safe_title = sanitize_filename(title)
+        ts = _extract_timestamp_from_entry(entry)
+
+        final_stem = f"{safe_uploader}.{video_id}.{safe_title}"
+        expected_audio_ext = ".m4a"
+        temp_audio_path_without_ext = os.path.join(target_folder, final_stem)
+        expected_temp_audio_path = temp_audio_path_without_ext + ".tmp" + expected_audio_ext
+        final_destination_audio_path = os.path.join(target_folder, f"{final_stem}{expected_audio_ext}")
+
+        last_progress_id = video_id
+        last_progress_ts = ts
+
+        # 同一批故事条目之间增加视频级延迟，降低请求频率
+        if downloaded > 0:
+            v_delay_min = get_video_delay_min()
+            v_delay_max = get_video_delay_max()
+            if v_delay_max > 0 and v_delay_max >= v_delay_min:
+                delay = random.uniform(v_delay_min, v_delay_max)
+                log_with_context(
+                    logger,
+                    logging.INFO,
+                    "故事条目间延迟",
+                    yt_channel=channel_name,
+                    delay_seconds=round(delay, 2)
+                )
+                time.sleep(delay)
+
+        if os.path.exists(final_destination_audio_path):
+            log_with_context(
+                logger, logging.INFO,
+                "故事视频已存在",
+                yt_channel=channel_name,
+                video_id=video_id
+            )
+            continue
+
+        custom_opts = {
+            "download_archive": DOWNLOAD_ARCHIVE,
+            "match_filter": member_content_filter,
+            "keepvideo": False,
+            "outtmpl": temp_audio_path_without_ext + ".tmp",
+        }
+        ydl_opts = get_ydl_opts(custom_opts)
+
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                ydl.download([video_url])
+        except yt_dlp.utils.DownloadError as de:
+            logger.error(f"故事视频下载错误: {de}")
+            continue
+        except Exception as e:
+            logger.error(f"故事视频下载异常: {e}")
+            continue
+
+        if os.path.exists(expected_temp_audio_path):
+            if safe_rename_file(expected_temp_audio_path, final_destination_audio_path):
+                file_size_mb = os.path.getsize(final_destination_audio_path) / (1024 * 1024)
+                log_with_context(
+                    logger, logging.INFO,
+                    "故事视频下载成功",
+                    yt_channel=channel_name,
+                    video_id=video_id,
+                    size_mb=round(file_size_mb, 2)
+                )
+                downloaded += 1
+                record_download_entry(video_id, channel_name)
+            else:
+                logger.error(f"故事视频重命名失败: {expected_temp_audio_path}")
+        else:
+            logger.error(f"未找到预期的临时文件: {expected_temp_audio_path}")
+
+    if last_progress_id:
+        provider.update_story_progress(group_name, {
+            "last_video_id": last_progress_id,
+            "last_timestamp": last_progress_ts,
+            "last_run_ts": int(run_started_ts)
+        })
+    else:
+        provider.update_story_progress(group_name, {"last_run_ts": int(run_started_ts)})
+
+    return downloaded > 0

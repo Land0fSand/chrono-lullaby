@@ -228,3 +228,8 @@ ch sync-to-notion --data config
 ```
 也可将 `config` 替换为 `all` / `archive` / `logs` 以同步其他数据。
 
+### 故事型频道说明
+- 在 channel_groups 中设置 channel_type: story（默认 realtime）
+- 故事型频道建议仅配置 1 个 YouTube 频道
+- 在该频道组下配置 story.interval_seconds（秒）和 story.items_per_run（每轮抓取条数），用于控制抓取频率
+- 故事型按发布时间顺序补全历史内容，不受 ilter_days/max_videos_per_channel 限制

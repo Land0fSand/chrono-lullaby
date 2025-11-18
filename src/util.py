@@ -181,13 +181,20 @@ def get_channel_groups_with_details(reload: bool = False) -> List[dict]:
             audio_folder = group.get('audio_folder', 'au')
             if not os.path.isabs(audio_folder):
                 audio_folder = os.path.join(PROJECT_ROOT, audio_folder)
-            
+
+            channel_type = (group.get('channel_type') or 'realtime').lower()
+            story_interval_seconds = int(group.get('story_interval_seconds', 86400))
+            story_items_per_run = int(group.get('story_items_per_run', 1))
+
             result.append({
                 'name': group_name,
                 'youtube_channels': group.get('youtube_channels', []),
                 'audio_folder': audio_folder,
                 'telegram_chat_id': group.get('telegram_chat_id'),
-                'enabled': enabled
+                'enabled': enabled,
+                'channel_type': 'story' if channel_type == 'story' else 'realtime',
+                'story_interval_seconds': story_interval_seconds,
+                'story_items_per_run': story_items_per_run,
             })
         
         if reload:

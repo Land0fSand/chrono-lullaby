@@ -11,7 +11,7 @@ if sys.stderr.encoding != 'utf-8':
     sys.stderr.reconfigure(encoding='utf-8')
 
 from dotenv import load_dotenv
-from task.dl_audio import dl_audio_latest
+from task.dl_audio import dl_audio_latest, dl_audio_story
 from util import refresh_channels_from_file, get_channel_groups_with_details
 from config import ENV_FILE, get_download_interval, get_channel_delay_min, get_channel_delay_max
 from logger import get_logger, log_with_context, TRACE_LEVEL
@@ -203,52 +203,131 @@ def dl_youtube(channels) -> None:
     
     logger.info("本轮下载任务完成")
 
+
 def main():
-    logger.info("YouTube 下载器启动")
-    
+    logger.info("YouTube 下载调度器")
+    story_last_run = {}
+    last_realtime_run_ts = 0  # 首次启动立即跑实时型
+
     while True:
         try:
-            # 获取频道组详细信息（每轮重新读取，支持热重载频道列表）
             channel_groups = get_channel_groups_with_details(reload=True)
-            
+
             if not channel_groups:
-                logger.warning("未找到任何频道组配置")
+                logger.warning("未找到任何频道分组配置")
                 time.sleep(60)
                 continue
-            
-            # 统计信息
-            total_channels = sum(len(group['youtube_channels']) for group in channel_groups)
-            log_with_context(
-                logger,
-                logging.INFO,
-                "刷新频道组列表",
-                group_count=len(channel_groups),
-                total_channels=total_channels
-            )
-            
-            # 使用新的多频道组下载函数
-            dl_youtube_multi_groups(channel_groups)
-            
-            wait_time = DOWNLOAD_INTERVAL
-            if wait_time > 0:
+
+            realtime_groups = [g for g in channel_groups if g.get('channel_type') != 'story']
+            story_groups = [g for g in channel_groups if g.get('channel_type') == 'story']
+
+            now_ts = time.time()
+
+            # 计算实时型到期
+            if DOWNLOAD_INTERVAL > 0:
+                realtime_due = max(0, DOWNLOAD_INTERVAL - (now_ts - last_realtime_run_ts))
+            else:
+                realtime_due = 0
+
+            # 计算故事型最早到期
+            story_due_min = None
+            due_story_groups = []
+            for group in story_groups:
+                group_name = group.get('name', 'story')
+                interval = int(group.get('story_interval_seconds', 86400))
+                items_per_run = int(group.get('story_items_per_run', 1))
+                last_run_ts = group.get('story_last_run_ts')
+                if last_run_ts is None:
+                    last_run_ts = story_last_run.get(group_name, 0)
+                due_in = interval - (now_ts - last_run_ts)
+
+                if due_in <= 0:
+                    due_story_groups.append((group, items_per_run))
+                    due_in = interval  # 下次到期时间
+
+                if story_due_min is None or due_in < story_due_min:
+                    story_due_min = due_in
+
+            # 运行实时型（仅到期才跑）
+            if realtime_due <= 0 and realtime_groups:
+                total_channels = sum(len(group['youtube_channels']) for group in realtime_groups)
                 log_with_context(
                     logger,
                     logging.INFO,
-                    "等待下一轮下载",
-                    wait_seconds=wait_time,
-                    wait_hours=round(wait_time / 3600, 2)
+                    "刷新实时频道列表",
+                    group_count=len(realtime_groups),
+                    total_channels=total_channels
                 )
-                time.sleep(wait_time)
-            else:
-                logger.info("轮次间隔为0，立即开始下一轮（视频级延迟已足够拉开频率）")
-                time.sleep(5)  # 短暂休息5秒，避免过于密集
-            
+                dl_youtube_multi_groups(realtime_groups)
+                last_realtime_run_ts = time.time()
+            elif not realtime_groups:
+                logger.info("当前没有实时型频道组需要下载")
+
+            # 运行到期的故事型
+            if due_story_groups:
+                story_delay_min = get_channel_delay_min()
+                story_delay_max = get_channel_delay_max()
+                for idx, (group, items_per_run) in enumerate(due_story_groups):
+                    if idx > 0 and story_delay_max >= story_delay_min and story_delay_max > 0:
+                        c_delay = random.uniform(story_delay_min, story_delay_max)
+                        log_with_context(
+                            logger,
+                            logging.INFO,
+                            "故事频道间延迟",
+                            tg_channel=group.get('name', 'story'),
+                            delay_seconds=round(c_delay, 2)
+                        )
+                        time.sleep(c_delay)
+
+                    group_name = group.get('name', 'story')
+                    yt_list = group.get('youtube_channels', [])
+                    if not yt_list:
+                        logger.warning(f"故事模式 {group_name} 未配置 YouTube 频道")
+                        continue
+                    channel = yt_list[0]
+                    log_with_context(
+                        logger,
+                        logging.INFO,
+                        "故事模式下载",
+                        tg_channel=group_name,
+                        yt_channel=channel,
+                        items=items_per_run
+                    )
+                    dl_audio_story(
+                        channel_name=channel,
+                        audio_folder=group.get('audio_folder'),
+                        group_name=group_name,
+                        items_per_run=items_per_run
+                    )
+                    story_last_run[group_name] = time.time()
+
+            # 计算下一次睡眠
+            wait_candidates = []
+            if DOWNLOAD_INTERVAL > 0:
+                next_realtime_due = DOWNLOAD_INTERVAL if realtime_due <= 0 else realtime_due
+                wait_candidates.append(next_realtime_due)
+            if story_due_min is not None:
+                wait_candidates.append(max(1, story_due_min))
+            if not wait_candidates:
+                wait_candidates.append(60)
+
+            wait_time = max(1, min(wait_candidates))
+            log_with_context(
+                logger,
+                logging.INFO,
+                "等待下一轮",
+                wait_seconds=wait_time,
+                wait_hours=round(wait_time / 3600, 2)
+            )
+            time.sleep(wait_time)
+
         except KeyboardInterrupt:
-            logger.info("接收到停止信号，正在退出...")
+            logger.info("收到停止信号，准备退出...")
             break
         except Exception as e:
-            logger.exception("下载器主循环发生未预期的错误")
-            time.sleep(60)  # 出错后等待1分钟再重试
+            logger.exception("调度循环出现未预期的错误")
+            time.sleep(60)
+
 
 if __name__ == "__main__":
     main() 

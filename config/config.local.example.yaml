@@ -33,11 +33,24 @@ channel_groups:
   - name: "示例频道组"
     description: "本地模式示例"
     enabled: true
+    channel_type: realtime
     telegram_chat_id: "-1001234567890"
     audio_folder: "au/sample"
     youtube_channels:
       - "@SampleChannel"
       - "@AnotherChannel"
+
+  - name: "示例故事频道"
+    description: "按时间顺序补全历史节目"
+    enabled: true
+    channel_type: story
+    telegram_chat_id: "-1009876543210"
+    audio_folder: "au/story"
+    story:
+      interval_seconds: 86400  # 故事型抓取频率
+      items_per_run: 1         # 每轮抓取条数
+    youtube_channels:
+      - "@OnlyOneChannel"  # 故事型建议只配置 1 个频道
 
 # 补充说明：
 # - 本地模式会在 data/ 目录下生成 sent_archive_* 文件，并使用 download_archive 记录下载历史

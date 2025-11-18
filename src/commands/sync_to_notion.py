@@ -109,11 +109,6 @@ def sync_config(local_provider: LocalConfigProvider, notion_provider: NotionConf
     """同步频道配置"""
     print("==> 正在同步频道配置到 Notion...")
 
-    channel_groups = local_provider.get_channel_groups()
-    if not channel_groups:
-        print("  [跳过] 本地配置中没有频道组数据")
-        return
-
     config_db_id = notion_provider.config_data.get('database_ids', {}).get('config')
     if not config_db_id:
         print("  [错误] Notion Config Database ID 未配置")
@@ -121,6 +116,26 @@ def sync_config(local_provider: LocalConfigProvider, notion_provider: NotionConf
         return
 
     adapter = notion_provider.adapter
+
+    # 确保新增字段存在（兼容已有数据库）
+    ensure_props = [
+        ("channel_type", {"type": "select", "select": {"options": [{"name": "realtime"}, {"name": "story"}]}}),
+        ("story_last_video_id", {"type": "rich_text", "rich_text": {}}),
+        ("story_last_timestamp", {"type": "number", "number": {}}),
+        ("story_interval_seconds", {"type": "number", "number": {}}),
+        ("story_items_per_run", {"type": "number", "number": {}}),
+        ("story_last_run_ts", {"type": "number", "number": {}}),
+    ]
+    for prop_name, schema in ensure_props:
+        try:
+            adapter.ensure_database_property(config_db_id, prop_name, schema)
+        except Exception as e:
+            print(f"  [提示] 确保 Notion 字段 {prop_name} 时出错: {e}")
+
+    channel_groups = local_provider.get_channel_groups()
+    if not channel_groups:
+        print("  [跳过] 本地配置中没有频道组数据（已确保 Notion 字段存在）")
+        return
 
     try:
         existing_pages = adapter.query_database(config_db_id)
@@ -154,8 +169,10 @@ def sync_config(local_provider: LocalConfigProvider, notion_provider: NotionConf
         chat_id = str(group.get('telegram_chat_id') or '').strip()
         audio_folder = str(group.get('audio_folder') or '').strip()
         youtube_channels = group.get('youtube_channels') or []
-        bot_token = (group.get('bot_token') or '').strip()
         enabled = bool(group.get('enabled', True))
+        channel_type = (group.get('channel_type') or 'realtime').lower()
+        story_interval_seconds = int(group.get('story_interval_seconds', 86400))
+        story_items_per_run = int(group.get('story_items_per_run', 1))
 
         if not chat_id:
             issues.append(f"频道组『{name or '未命名'}』缺少 telegram_chat_id，已跳过")
@@ -176,7 +193,9 @@ def sync_config(local_provider: LocalConfigProvider, notion_provider: NotionConf
             "telegram_chat_id": text_prop(chat_id),
             "audio_folder": text_prop(audio_folder),
             "youtube_channels": adapter.build_multi_select_property(youtube_channels_clean),
-            "bot_token": text_prop(bot_token),
+            "channel_type": adapter.build_select_property('story' if channel_type == 'story' else 'realtime'),
+            "story_interval_seconds": {"number": story_interval_seconds},
+            "story_items_per_run": {"number": story_items_per_run},
         }
 
         try:
@@ -377,4 +396,3 @@ if __name__ == "__main__":
         import traceback
         traceback.print_exc()
         sys.exit(1)
-

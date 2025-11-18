@@ -187,7 +187,8 @@ ch start
 - **telegram_chat_id**: Telegram 频道 ID
 - **audio_folder**: 音频文件夹路径
 - **youtube_channels**: YouTube 频道列表（每行一个）
-- **bot_token**: 独立 Bot Token（可选）
+> 频道表不再使用独立 bot_token 字段，统一使用全局 telegram.bot_token。
+
 
 ### SentArchive Database（已发送记录）
 

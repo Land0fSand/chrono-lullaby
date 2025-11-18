@@ -688,6 +688,8 @@ class NotionAdapter:
             if select_obj:
                 return select_obj.get("name")
             return None
+        elif prop_type == "number":
+            return prop.get("number")
         elif prop_type == "multi_select":
             multi_select_list = prop.get("multi_select", [])
             return [item.get("name") for item in multi_select_list if item.get("name")]
@@ -720,8 +722,28 @@ class NotionDatabaseSchemas:
             "youtube_channels": {
                 "multi_select": {}
             },
-            "bot_token": {
+            "channel_type": {
+                "select": {
+                    "options": [
+                        {"name": "realtime", "color": "blue"},
+                        {"name": "story", "color": "green"}
+                    ]
+                }
+            },
+            "story_last_video_id": {
                 "rich_text": {}
+            },
+            "story_last_timestamp": {
+                "number": {}
+            },
+            "story_interval_seconds": {
+                "number": {}
+            },
+            "story_items_per_run": {
+                "number": {}
+            },
+            "story_last_run_ts": {
+                "number": {}
             }
         }
     
@@ -801,4 +823,3 @@ class NotionDatabaseSchemas:
                 "rich_text": {}
             }
         }
-

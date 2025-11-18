@@ -43,6 +43,7 @@ CHANNELS_FILE = os.path.join(PROJECT_ROOT, "config", "channels.txt")
 ENV_FILE = os.path.join(PROJECT_ROOT, ".env")
 DEBUG_INFO = os.path.join(PROJECT_ROOT, "debug_closest_video.json")
 STORY_FILE = os.path.join(PROJECT_ROOT, "story.txt")
+STORY_PROGRESS_FILE = os.path.join(PROJECT_ROOT, "data", "story_progress.json")
 
 # ============================================================
 # 配置源初始化
