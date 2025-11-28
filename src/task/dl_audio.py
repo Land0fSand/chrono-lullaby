@@ -1483,6 +1483,15 @@ def dl_audio_story(channel_name: str, audio_folder: str, group_name: str, items_
         if not video_id:
             continue
         video_url = entry.get("webpage_url") or entry.get("url") or f"{yt_base_url}watch?v={video_id}"
+
+        # 准备一个容器来接真实文件名
+        downloaded_file_info = {"path": None}
+
+        def story_progress_hook(d):
+            if d['status'] == 'finished':
+                # 获取真实的文件路径
+                downloaded_file_info["path"] = d.get('filename')
+
         uploader = entry.get("uploader") or entry.get("channel") or channel_name or "UnknownChannel"
         safe_uploader = sanitize_filename(uploader)
         title = entry.get("fulltitle") or entry.get("title") or video_id
@@ -1491,8 +1500,6 @@ def dl_audio_story(channel_name: str, audio_folder: str, group_name: str, items_
 
         final_stem = f"{safe_uploader}.{video_id}.{safe_title}"
         expected_audio_ext = ".m4a"
-        temp_audio_path_without_ext = os.path.join(target_folder, final_stem)
-        expected_temp_audio_path = temp_audio_path_without_ext + ".tmp" + expected_audio_ext
         final_destination_audio_path = os.path.join(target_folder, f"{final_stem}{expected_audio_ext}")
 
         last_progress_id = video_id
@@ -1525,7 +1532,8 @@ def dl_audio_story(channel_name: str, audio_folder: str, group_name: str, items_
         custom_opts = {
             "match_filter": member_content_filter,
             "keepvideo": False,
-            "outtmpl": temp_audio_path_without_ext + ".tmp",
+            "outtmpl": os.path.join(target_folder, f"%(uploader)s.%(id)s.%(title)s.tmp"),
+            "progress_hooks": [story_progress_hook],
         }
         ydl_opts = get_ydl_opts(custom_opts)
 
@@ -1539,8 +1547,18 @@ def dl_audio_story(channel_name: str, audio_folder: str, group_name: str, items_
             logger.error(f"故事视频下载异常: {e}")
             continue
 
-        if os.path.exists(expected_temp_audio_path):
-            if safe_rename_file(expected_temp_audio_path, final_destination_audio_path):
+        # 使用 Hook 捕获的真实路径
+        actual_temp_path = downloaded_file_info.get("path")
+
+        # 如果 Hook 没拿到，尝试模糊查找
+        if not actual_temp_path:
+            for f in os.listdir(target_folder):
+                if video_id in f and (f.endswith('.tmp.m4a') or f.endswith('.tmp')):
+                    actual_temp_path = os.path.join(target_folder, f)
+                    break
+
+        if actual_temp_path and os.path.exists(actual_temp_path):
+            if safe_rename_file(actual_temp_path, final_destination_audio_path):
                 file_size_mb = os.path.getsize(final_destination_audio_path) / (1024 * 1024)
                 log_with_context(
                     logger, logging.INFO,
@@ -1552,9 +1570,9 @@ def dl_audio_story(channel_name: str, audio_folder: str, group_name: str, items_
                 downloaded += 1
                 record_download_entry(video_id, channel_name)
             else:
-                logger.error(f"故事视频重命名失败: {expected_temp_audio_path}")
+                logger.error(f"故事视频重命名失败: {actual_temp_path}")
         else:
-            logger.error(f"未找到预期的临时文件: {expected_temp_audio_path}")
+            logger.error(f"未找到预期的临时文件 (hook path: {actual_temp_path})")
 
     if last_progress_id:
         provider.update_story_progress(group_name, {
