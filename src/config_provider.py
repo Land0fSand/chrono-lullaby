@@ -209,14 +209,119 @@ class BaseConfigProvider(ABC):
     @abstractmethod
 
     def add_sent_record(self, video_id: str, chat_id: str, title: str, file_path: str, machine_id: Optional[str] = None) -> bool:
+        """添加已发送记录到 Notion"""
+        sys_logger = _get_sys_logger()
 
-        """添加已发送记录"""
+        database_id = self.config_data.get('database_ids', {}).get('sent_archive')
+        if not database_id:
+            if sys_logger:
+                sys_logger.error("Notion 已发送记录数据库 ID 未配置")
+            return False
 
-        pass
+        if sys_logger:
+            from logger import log_with_context
+            import logging
+            log_with_context(
+                sys_logger, logging.INFO,
+                "准备写入 Notion 发送记录",
+                video_id=video_id,
+                chat_id=chat_id,
+                title=title[:50] + "..." if len(title) > 50 else title,
+                database_id=database_id[:8] + "..."
+            )
 
-    
+        properties = {
+            "video_id": self.adapter.build_title_property(video_id),
+            "chat_id": self.adapter.build_text_property(str(chat_id)),
+            "sent_date": self.adapter.build_date_property(
+                datetime.now(timezone.utc).isoformat()
+            ),
+            "file_path": self.adapter.build_text_property(file_path)
+        }
 
-    @abstractmethod
+        title_property_name = "video_title"
+        title_prop_type = self.adapter.get_database_property_type(database_id, title_property_name)
+
+        if title_prop_type is None:
+            try:
+                self.adapter.ensure_database_property(
+                    database_id,
+                    title_property_name,
+                    {"type": "rich_text", "rich_text": {}}
+                )
+                title_prop_type = self.adapter.get_database_property_type(database_id, title_property_name)
+                if sys_logger:
+                    from logger import log_with_context
+                    import logging
+                    log_with_context(
+                        sys_logger, logging.INFO,
+                        "成功创建 video_title 属性",
+                        property_type=title_prop_type
+                    )
+            except Exception as ensure_exc:
+                print(f"Warning: failed to ensure video_title property: {ensure_exc}")
+                if sys_logger:
+                    from logger import log_with_context
+                    import logging
+                    log_with_context(
+                        sys_logger, logging.WARNING,
+                        "创建 video_title 属性失败",
+                        error=str(ensure_exc)
+                    )
+                title_prop_type = None
+
+        if title_prop_type is None:
+            # Fallback to legacy property name for backward compatibility.
+            title_property_name = "title"
+            title_prop_type = self.adapter.get_database_property_type(database_id, title_property_name)
+
+        if title_prop_type:
+            if title_prop_type == "title":
+                properties[title_property_name] = self.adapter.build_title_property(title)
+            else:
+                properties[title_property_name] = self.adapter.build_text_property(title)
+        else:
+            print("Warning: no usable title property found, skipping title field write")
+            if sys_logger:
+                sys_logger.warning("未找到可用的 title 属性，跳过 title 字段写入")
+
+        record_machine_id = machine_id or self.config_data.get('sync', {}).get('machine_id')
+        if record_machine_id:
+            properties["machine_id"] = self.adapter.build_text_property(record_machine_id)
+
+        try:
+            self.adapter.add_page_to_database(database_id, properties)
+
+            if chat_id in self._sent_archives_cache:
+                self._sent_archives_cache[chat_id].add(video_id)
+
+            if sys_logger:
+                from logger import log_with_context
+                import logging
+                log_with_context(
+                    sys_logger, logging.INFO,
+                    "成功写入 Notion 已发送记录",
+                    video_id=video_id,
+                    chat_id=chat_id
+                )
+            return True
+        except Exception as e:
+            print(f"错误：向 Notion 写入已发送记录失败: {e}")
+            if sys_logger:
+                from logger import log_with_context
+                import logging
+                import traceback
+                log_with_context(
+                    sys_logger, logging.ERROR,
+                    "向 Notion 写入发送记录失败",
+                    video_id=video_id,
+                    chat_id=chat_id,
+                    error=str(e),
+                    error_type=type(e).__name__,
+                    traceback=traceback.format_exc()
+                )
+            return False
+
 
     def has_sent_record(self, video_id: str, chat_id: str) -> bool:
 
@@ -1318,30 +1423,6 @@ class NotionConfigProvider(BaseConfigProvider):
 
         
 
-        if sys_logger:
-
-            from logger import log_with_context
-
-            import logging
-
-            log_with_context(
-
-                sys_logger, logging.DEBUG,
-
-                "准备写入 Notion 下载记录",
-
-                video_id=video_id,
-
-                channel=channel,
-
-                status=status,
-
-                database_id=database_id[:8] + "..."
-
-            )
-
-        
-
         try:
 
             properties = {
@@ -1369,20 +1450,6 @@ class NotionConfigProvider(BaseConfigProvider):
                 properties["machine_id"] = self.adapter.build_text_property(record_machine_id)
 
             
-
-            if sys_logger:
-
-                log_with_context(
-
-                    sys_logger, logging.DEBUG,
-
-                    "Notion 下载记录属性已构建",
-
-                    properties_keys=list(properties.keys())
-
-                )
-
-
 
             self.adapter.add_page_to_database(database_id, properties)
 
@@ -1519,272 +1586,119 @@ class NotionConfigProvider(BaseConfigProvider):
     
 
     def add_sent_record(self, video_id: str, chat_id: str, title: str, file_path: str, machine_id: Optional[str] = None) -> bool:
-
         """添加已发送记录到 Notion"""
-
         sys_logger = _get_sys_logger()
 
-        
-
         database_id = self.config_data.get('database_ids', {}).get('sent_archive')
-
         if not database_id:
-
             if sys_logger:
-
-                sys_logger.error("Notion 发送记录数据库 ID 未配置")
-
+                sys_logger.error("Notion 已发送记录数据库 ID 未配置")
             return False
-
-        
 
         if sys_logger:
-
             from logger import log_with_context
-
             import logging
-
             log_with_context(
-
-                sys_logger, logging.DEBUG,
-
+                sys_logger, logging.INFO,
                 "准备写入 Notion 发送记录",
-
                 video_id=video_id,
-
                 chat_id=chat_id,
-
                 title=title[:50] + "..." if len(title) > 50 else title,
-
                 database_id=database_id[:8] + "..."
-
             )
 
-        
+        properties = {
+            "video_id": self.adapter.build_title_property(video_id),
+            "chat_id": self.adapter.build_text_property(str(chat_id)),
+            "sent_date": self.adapter.build_date_property(
+                datetime.now(timezone.utc).isoformat()
+            ),
+            "file_path": self.adapter.build_text_property(file_path)
+        }
 
-        try:
+        title_property_name = "video_title"
+        title_prop_type = self.adapter.get_database_property_type(database_id, title_property_name)
 
-            properties = {
+        if title_prop_type is None:
+            try:
+                self.adapter.ensure_database_property(
+                    database_id,
+                    title_property_name,
+                    {"type": "rich_text", "rich_text": {}}
+                )
+                title_prop_type = self.adapter.get_database_property_type(database_id, title_property_name)
+                if sys_logger:
+                    from logger import log_with_context
+                    import logging
+                    log_with_context(
+                        sys_logger, logging.INFO,
+                        "成功创建 video_title 属性",
+                        property_type=title_prop_type
+                    )
+            except Exception as ensure_exc:
+                print(f"Warning: failed to ensure video_title property: {ensure_exc}")
+                if sys_logger:
+                    from logger import log_with_context
+                    import logging
+                    log_with_context(
+                        sys_logger, logging.WARNING,
+                        "创建 video_title 属性失败",
+                        error=str(ensure_exc)
+                    )
+                title_prop_type = None
 
-                "video_id": self.adapter.build_title_property(video_id),
-
-                "chat_id": self.adapter.build_text_property(str(chat_id)),
-
-                "sent_date": self.adapter.build_date_property(
-
-                    datetime.now(timezone.utc).isoformat()
-
-                ),
-
-                "file_path": self.adapter.build_text_property(file_path)
-
-            }
-
-
-
-            title_property_name = "video_title"
-
+        if title_prop_type is None:
+            # Fallback to legacy property name for backward compatibility.
+            title_property_name = "title"
             title_prop_type = self.adapter.get_database_property_type(database_id, title_property_name)
 
-
-
-            if sys_logger:
-
-                log_with_context(
-
-                    sys_logger, logging.DEBUG,
-
-                    "检查 video_title 属性类型",
-
-                    property_name=title_property_name,
-
-                    property_type=title_prop_type
-
-                )
-
-
-
-            if title_prop_type is None:
-
-                try:
-
-                    if sys_logger:
-
-                        sys_logger.debug("video_title 属性不存在，尝试创建")
-
-                    # Ensure new property exists to avoid conflicts with legacy 'title' field.
-
-                    self.adapter.ensure_database_property(
-
-                        database_id,
-
-                        title_property_name,
-
-                        {"type": "rich_text", "rich_text": {}}
-
-                    )
-
-                    title_prop_type = self.adapter.get_database_property_type(database_id, title_property_name)
-
-                    if sys_logger:
-
-                        log_with_context(
-
-                            sys_logger, logging.INFO,
-
-                            "成功创建 video_title 属性",
-
-                            property_type=title_prop_type
-
-                        )
-
-                except Exception as ensure_exc:
-
-                    print(f"Warning: failed to ensure video_title property: {ensure_exc}")
-
-                    if sys_logger:
-
-                        log_with_context(
-
-                            sys_logger, logging.WARNING,
-
-                            "创建 video_title 属性失败",
-
-                            error=str(ensure_exc)
-
-                        )
-
-                    title_prop_type = None
-
-
-
-            if title_prop_type is None:
-
-                # Fallback to legacy property name for backward compatibility.
-
-                title_property_name = "title"
-
-                title_prop_type = self.adapter.get_database_property_type(database_id, title_property_name)
-
-                if sys_logger:
-
-                    log_with_context(
-
-                        sys_logger, logging.DEBUG,
-
-                        "降级使用 title 属性",
-
-                        property_type=title_prop_type
-
-                    )
-
-
-
-            if title_prop_type:
-
-                if title_prop_type == "title":
-
-                    properties[title_property_name] = self.adapter.build_title_property(title)
-
-                else:
-
-                    properties[title_property_name] = self.adapter.build_text_property(title)
-
+        if title_prop_type:
+            if title_prop_type == "title":
+                properties[title_property_name] = self.adapter.build_title_property(title)
             else:
-
-                print("Warning: no usable title property found, skipping title field write")
-
-                if sys_logger:
-
-                    sys_logger.warning("未找到可用的 title 属性，跳过标题字段")
-
-
-
-            record_machine_id = machine_id or self.config_data.get('sync', {}).get('machine_id')
-
-            if record_machine_id:
-
-                properties["machine_id"] = self.adapter.build_text_property(record_machine_id)
-
-
-
+                properties[title_property_name] = self.adapter.build_text_property(title)
+        else:
+            print("Warning: no usable title property found, skipping title field write")
             if sys_logger:
+                sys_logger.warning("未找到可用的 title 属性，跳过 title 字段写入")
 
-                log_with_context(
+        record_machine_id = machine_id or self.config_data.get('sync', {}).get('machine_id')
+        if record_machine_id:
+            properties["machine_id"] = self.adapter.build_text_property(record_machine_id)
 
-                    sys_logger, logging.DEBUG,
-
-                    "Notion 发送记录属性已构建",
-
-                    properties_keys=list(properties.keys())
-
-                )
-
-
-
+        try:
             self.adapter.add_page_to_database(database_id, properties)
 
-            
-
-            # 更新缓存
-
             if chat_id in self._sent_archives_cache:
-
                 self._sent_archives_cache[chat_id].add(video_id)
 
-            
-
             if sys_logger:
-
-                log_with_context(
-
-                    sys_logger, logging.INFO,
-
-                    "成功写入 Notion 发送记录",
-
-                    video_id=video_id,
-
-                    chat_id=chat_id
-
-                )
-
-            
-
-            return True
-
-        except Exception as e:
-
-            print(f"错误：向 Notion 写入已发送记录失败: {e}")
-
-            if sys_logger:
-
                 from logger import log_with_context
-
                 import logging
-
-                import traceback
-
                 log_with_context(
-
-                    sys_logger, logging.ERROR,
-
-                    "向 Notion 写入发送记录失败",
-
+                    sys_logger, logging.INFO,
+                    "成功写入 Notion 已发送记录",
                     video_id=video_id,
-
-                    chat_id=chat_id,
-
-                    error=str(e),
-
-                    error_type=type(e).__name__,
-
-                    traceback=traceback.format_exc()
-
+                    chat_id=chat_id
                 )
-
+            return True
+        except Exception as e:
+            print(f"错误：向 Notion 写入已发送记录失败: {e}")
+            if sys_logger:
+                from logger import log_with_context
+                import logging
+                import traceback
+                log_with_context(
+                    sys_logger, logging.ERROR,
+                    "向 Notion 写入发送记录失败",
+                    video_id=video_id,
+                    chat_id=chat_id,
+                    error=str(e),
+                    error_type=type(e).__name__,
+                    traceback=traceback.format_exc()
+                )
             return False
 
-    
 
     def has_sent_record(self, video_id: str, chat_id: str) -> bool:
 

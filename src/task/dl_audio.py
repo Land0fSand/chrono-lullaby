@@ -1464,18 +1464,6 @@ def dl_audio_story(channel_name: str, audio_folder: str, group_name: str, items_
             yt_channel=channel_name,
         )
 
-    log_with_context(
-        logger,
-        logging.DEBUG,
-        "Story mode: prepared download batch",
-        yt_channel=channel_name,
-        total_entries=len(entries),
-        selected=len(selected_entries),
-        limit=items_limit,
-        last_timestamp=timestamp_checkpoint_value,
-        last_video_id=last_video_id,
-    )
-
     if not selected_entries:
         log_with_context(
             logger,
@@ -1535,7 +1523,6 @@ def dl_audio_story(channel_name: str, audio_folder: str, group_name: str, items_
             continue
 
         custom_opts = {
-            "download_archive": DOWNLOAD_ARCHIVE,
             "match_filter": member_content_filter,
             "keepvideo": False,
             "outtmpl": temp_audio_path_without_ext + ".tmp",

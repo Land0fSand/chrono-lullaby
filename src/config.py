@@ -64,9 +64,6 @@ def init_config_provider(mode_override: Optional[str] = None):
     # 配置加载完成后，才能安全地使用系统日志
     sys_logger = _get_sys_logger()
     
-    if sys_logger:
-        sys_logger.debug("开始初始化配置提供者", extra={'extra_data': {'mode_override': mode_override}})
-    
     if config is None:
         # 回退到本地模式
         from config_provider import LocalConfigProvider

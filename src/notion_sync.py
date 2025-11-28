@@ -596,15 +596,6 @@ def init_sync_service(config_provider, sync_config: Dict[str, Any]):
             sys_logger.warning("尝试重复初始化 Notion 同步服务")
         return _sync_service
     
-    if sys_logger:
-        from logger import log_with_context
-        import logging
-        log_with_context(
-            sys_logger, logging.DEBUG,
-            "初始化 Notion 同步服务",
-            sync_config=sync_config
-        )
-    
     _sync_service = NotionSyncService(config_provider, sync_config)
     _sync_service.start()
     

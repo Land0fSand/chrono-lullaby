@@ -224,17 +224,6 @@ class NotionAdapter:
         """
         sys_logger = _get_sys_logger()
         
-        if sys_logger:
-            from logger import log_with_context
-            import logging
-            log_with_context(
-                sys_logger, logging.DEBUG,
-                "📝 Notion API: 准备添加页面到数据库",
-                database_id=database_id[:8] + "...",
-                properties_count=len(properties),
-                property_names=list(properties.keys())
-            )
-        
         try:
             page = self._retry_api_call(
                 self.client.pages.create,
@@ -242,14 +231,6 @@ class NotionAdapter:
                 properties=properties
             )
             page_id = page["id"]
-            
-            if sys_logger:
-                log_with_context(
-                    sys_logger, logging.DEBUG,
-                    "✅ Notion API: 成功添加页面",
-                    database_id=database_id[:8] + "...",
-                    page_id=page_id[:8] + "..."
-                )
             
             return page_id
         except Exception as e:

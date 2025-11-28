@@ -124,7 +124,6 @@ class ProcessManager:
         # 设置信号处理器
         signal.signal(signal.SIGINT, self.signal_handler)
         signal.signal(signal.SIGTERM, self.signal_handler)
-        sys_logger.debug("信号处理器已注册", extra={'extra_data': {'signals': ['SIGINT', 'SIGTERM']}})
         
         try:
             # 启动下载器进程
@@ -184,13 +183,6 @@ class ProcessManager:
                 json.dump(process_info, f, indent=2, ensure_ascii=False)
             
             logger.info("进程信息已保存到 data/process_info.json")
-            log_with_context(
-                sys_logger, logging.DEBUG,
-                "进程信息已保存",
-                file=str(data_dir / 'process_info.json'),
-                downloader_pid=self.downloader_process.pid,
-                bot_pid=self.bot_process.pid
-            )
             logger.info("服务正在运行...")
             sys_logger.info("所有服务已启动，进入监控循环")
             
@@ -288,7 +280,6 @@ def main():
                 if isinstance(notion_block, dict):
                     sync_config = notion_block.get('sync', {})
             if sync_config:
-                sys_logger.debug("启动 Notion 同步服务", extra={'extra_data': sync_config})
                 init_sync_service(provider, sync_config)
                 logger.info("Notion 同步服务已启动")
                 sys_logger.info("Notion 同步服务启动成功")
