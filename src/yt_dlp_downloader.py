@@ -91,8 +91,8 @@ def dl_youtube_multi_groups(channel_groups) -> None:
     delay_min = get_channel_delay_min()
     delay_max = get_channel_delay_max()
     
-    logger.info(f"开始批量下载，共 {len(channel_groups)} 个频道组，{total_channels} 个YouTube频道")
-    logger.info(f"频道间延迟：{delay_min}-{delay_max}秒（随机）")
+    logger.info(f"🚀 开始批量下载，共 {len(channel_groups)} 个频道组，{total_channels} 个YouTube频道")
+    logger.info(f"⏱️ 频道间延迟：{delay_min}-{delay_max}秒（随机）")
     
     # 显示各组信息
     for group in channel_groups:
@@ -100,7 +100,7 @@ def dl_youtube_multi_groups(channel_groups) -> None:
             log_with_context(
                 logger,
                 logging.INFO,
-                f"频道组配置",
+                f"📋 频道组配置",
                 group_name=group['name'],
                 channel_count=len(group['youtube_channels']),
                 audio_folder=group['audio_folder']
@@ -109,7 +109,7 @@ def dl_youtube_multi_groups(channel_groups) -> None:
     # 将频道穿插排列
     interleaved_channels = interleave_channels(channel_groups)
     
-    logger.info(f"已优化下载顺序：多个频道组交替进行，确保及时性")
+    logger.info(f"🔁 已优化下载顺序：多个频道组交替进行，确保及时性")
     
     # 按穿插后的顺序处理
     for idx, item in enumerate(interleaved_channels, 1):
@@ -134,7 +134,7 @@ def dl_youtube_multi_groups(channel_groups) -> None:
             log_with_context(
                 logger,
                 logging.INFO,
-                f"处理频道 [{idx}/{total_channels}]",
+                f"▶️ 处理频道 [{idx}/{total_channels}]",
                 tg_channel=group_name,
                 yt_channel=channel
             )
@@ -149,7 +149,7 @@ def dl_youtube_multi_groups(channel_groups) -> None:
             log_with_context(
                 logger,
                 logging.ERROR,
-                f"下载频道失败",
+                f"❌ 下载频道失败",
                 tg_channel=group_name,
                 yt_channel=channel,
                 error=str(e),
@@ -157,11 +157,9 @@ def dl_youtube_multi_groups(channel_groups) -> None:
             )
             continue
     
-    logger.info("本轮下载任务完成")
-
 def dl_youtube(channels) -> None:
     """下载 YouTube 频道的音频（向后兼容的旧接口）"""
-    logger.info(f"开始批量下载，共 {len(channels)} 个频道")
+    logger.info(f"🚀 开始批量下载，共 {len(channels)} 个频道")
     
     # 从配置读取频道间延迟
     delay_min = get_channel_delay_min()
@@ -184,7 +182,7 @@ def dl_youtube(channels) -> None:
             log_with_context(
                 logger,
                 logging.INFO,
-                f"处理频道 [{idx}/{len(channels)}]",
+                f"▶️ 处理频道 [{idx}/{len(channels)}]",
                 yt_channel=channel
             )
             
@@ -194,15 +192,13 @@ def dl_youtube(channels) -> None:
             log_with_context(
                 logger,
                 logging.ERROR,
-                f"下载频道失败",
+                f"❌ 下载频道失败",
                 yt_channel=channel,
                 error=str(e),
                 error_type=type(e).__name__
             )
             continue
     
-    logger.info("本轮下载任务完成")
-
 
 def main():
     logger.info("YouTube 下载调度器")
@@ -224,13 +220,16 @@ def main():
             now_ts = time.time()
 
             # 计算实时型到期
+            next_realtime_due = None
             if DOWNLOAD_INTERVAL > 0:
                 realtime_due = max(0, DOWNLOAD_INTERVAL - (now_ts - last_realtime_run_ts))
+                next_realtime_due = realtime_due
             else:
                 realtime_due = 0
 
             # 计算故事型最早到期
             story_due_min = None
+            story_due_name = None
             due_story_groups = []
             for group in story_groups:
                 group_name = group.get('name', 'story')
@@ -247,6 +246,7 @@ def main():
 
                 if story_due_min is None or due_in < story_due_min:
                     story_due_min = due_in
+                    story_due_name = group_name
 
             # 运行实时型（仅到期才跑）
             if realtime_due <= 0 and realtime_groups:
@@ -288,7 +288,7 @@ def main():
                     log_with_context(
                         logger,
                         logging.INFO,
-                        "故事模式下载",
+                        "📚 故事模式下载",
                         tg_channel=group_name,
                         yt_channel=channel,
                         items=items_per_run
@@ -312,12 +312,21 @@ def main():
                 wait_candidates.append(60)
 
             wait_time = max(1, min(wait_candidates))
+            wait_context = {
+                "wait_seconds": wait_time,
+                "wait_hours": round(wait_time / 3600, 2),
+            }
+            if next_realtime_due is not None:
+                wait_context["next_realtime_seconds"] = round(next_realtime_due, 2)
+            if story_due_name is not None and story_due_min is not None:
+                wait_context["next_story"] = story_due_name
+                wait_context["next_story_seconds"] = round(story_due_min, 2)
+
             log_with_context(
                 logger,
                 logging.INFO,
                 "等待下一轮",
-                wait_seconds=wait_time,
-                wait_hours=round(wait_time / 3600, 2)
+                **wait_context
             )
             time.sleep(wait_time)
 

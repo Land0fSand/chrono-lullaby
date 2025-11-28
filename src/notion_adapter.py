@@ -229,7 +229,7 @@ class NotionAdapter:
             import logging
             log_with_context(
                 sys_logger, logging.DEBUG,
-                "Notion API: 准备添加页面到数据库",
+                "📝 Notion API: 准备添加页面到数据库",
                 database_id=database_id[:8] + "...",
                 properties_count=len(properties),
                 property_names=list(properties.keys())
@@ -246,7 +246,7 @@ class NotionAdapter:
             if sys_logger:
                 log_with_context(
                     sys_logger, logging.DEBUG,
-                    "Notion API: 成功添加页面",
+                    "✅ Notion API: 成功添加页面",
                     database_id=database_id[:8] + "...",
                     page_id=page_id[:8] + "..."
                 )
@@ -259,7 +259,7 @@ class NotionAdapter:
                 import traceback
                 log_with_context(
                     sys_logger, logging.ERROR,
-                    "Notion API: 添加页面失败",
+                    "❌ Notion API: 添加页面失败",
                     database_id=database_id[:8] + "...",
                     error=str(e),
                     error_type=type(e).__name__,

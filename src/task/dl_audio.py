@@ -29,16 +29,87 @@ from config import (
     get_config_provider,
 )
 from logger import get_logger, log_with_context, TRACE_LEVEL
+from pathlib import Path
 import random
-
 # 使用统一的日志系统
 logger = get_logger('downloader.dl_audio')
-
 
 _download_archive_cache = {
     "mtime": None,
     "entries": set(),
 }
+
+_cleaned_audio_folders = set()
+
+
+def cleanup_incomplete_downloads(folder: str) -> int:
+    """
+    删除音频目录中残留的 .tmp/.part 等未完成下载文件，避免下次继续下载报 416。
+    同一个目录只在进程生命周期内清理一次，防止重复日志。
+    """
+    if not folder:
+        return 0
+    abs_folder = os.path.abspath(folder)
+    if abs_folder in _cleaned_audio_folders:
+        return 0
+    path = Path(abs_folder)
+    if not path.exists():
+        return 0
+
+    removed = 0
+    for entry in path.iterdir():
+        if not entry.is_file():
+            continue
+        name = entry.name
+        if (
+            name.endswith('.tmp')
+            or '.tmp.' in name
+            or name.endswith('.part')
+            or name.endswith('.ytdl')
+        ):
+            try:
+                entry.unlink()
+                removed += 1
+            except OSError:
+                continue
+
+    if removed:
+        log_with_context(
+            logger, logging.INFO,
+            "🧹 清理未完成的下载残留",
+            audio_folder=abs_folder,
+            removed_files=removed
+        )
+
+    _cleaned_audio_folders.add(abs_folder)
+    return removed
+
+
+def cleanup_partial_files_for_base(base_path: str) -> int:
+    """
+    删除某个视频对应的残留 .tmp/.part 文件。
+    """
+    if not base_path:
+        return 0
+    path = Path(base_path)
+    parent = path.parent
+    if not parent.exists():
+        return 0
+    prefix = path.name
+    removed = 0
+    for entry in parent.iterdir():
+        if not entry.is_file():
+            continue
+        name = entry.name
+        if not name.startswith(prefix):
+            continue
+        if '.tmp' in name or name.endswith('.part'):
+            try:
+                entry.unlink()
+                removed += 1
+            except OSError:
+                continue
+    return removed
 
 
 def _load_download_archive() -> set:
@@ -160,12 +231,20 @@ class TimestampedYTDLLogger:
         if not text:
             return ""
         text = text.replace('[0;31m', '').replace('[0m', '')
-        return re.sub(r'\x1b\[[0-9;]*m', '', text).strip()
+        text = re.sub(r'\x1b\[[0-9;]*m', '', text).strip()
+        text = re.sub(r'^(ERROR|WARNING|INFO)\s*:\s*', '', text, flags=re.IGNORECASE)
+        text = re.sub(r'^\[download\]\s+', '', text, flags=re.IGNORECASE)
+        return text
+
+    def _is_progress_message(self, text: str) -> bool:
+        """
+        yt-dlp 会用 [download] xxx% ... 每次回调都刷一条，这里直接丢弃，避免日志被进度刷屏。
+        """
+        return bool(re.match(r'^\\[download\\]\\s+\\d+(?:\\.\\d+)?%\\b', text))
 
     def _log_trace(self, msg):
-        cleaned = self._clean_message(msg)
-        if cleaned:
-            self._logger.trace(cleaned)
+        # 提升默认日志级别到 INFO：忽略 yt-dlp 的 debug/trace 输出
+        return
 
     def debug(self, msg):
         self._log_trace(msg)
@@ -178,7 +257,7 @@ class TimestampedYTDLLogger:
     def warning(self, msg):
         cleaned = self._clean_message(msg)
         if cleaned:
-            self._logger.warning(cleaned)
+            self._logger.warning(f'⚠️ yt-dlp: {cleaned}')
 
     def error(self, msg):
         cleaned = self._clean_message(msg)
@@ -186,10 +265,10 @@ class TimestampedYTDLLogger:
             return
         lower = cleaned.lower()
         if 'members-only content' in lower or 'join this channel' in lower:
-            # yt-dlp 提示会员专享内容，降级为 trace 以避免刷屏
+            # yt-dlp 提示会员专属内容，降级为 trace 以免刷屏
             self._logger.trace(cleaned)
         else:
-            self._logger.error(cleaned)
+            self._logger.error(f'❌ yt-dlp: {cleaned}')
 
     def critical(self, msg):
         cleaned = self._clean_message(msg)
@@ -270,7 +349,7 @@ def safe_rename_file(src, dst, max_retries=5):
 
 def record_download_entry(video_id: str, channel_name: Optional[str]) -> None:
     """
-    ��¼������¼���������ṩ�ߣ�֧�ֱ��غ� Notion��
+    把成功下载的视频记录到配置提供者（本地/Notion），避免重复下载。
     """
     try:
         provider = get_config_provider()
@@ -279,7 +358,7 @@ def record_download_entry(video_id: str, channel_name: Optional[str]) -> None:
 
         has_check = getattr(provider, "has_download_record", None)
         if callable(has_check) and has_check(video_id):
-            logger.trace(f"������浵��¼�Ѵ���: {video_id}")
+            logger.trace(f"下载存档记录已存在: {video_id}")
             return
 
         add_record = getattr(provider, "add_download_record", None)
@@ -288,21 +367,21 @@ def record_download_entry(video_id: str, channel_name: Optional[str]) -> None:
             if success:
                 log_with_context(
                     logger, TRACE_LEVEL,
-                    "�Ѽ�¼����浵",
+                    "已记录下载存档",
                     video_id=video_id,
                     yt_channel=channel_name
                 )
             else:
                 log_with_context(
                     logger, logging.WARNING,
-                    "��¼����浵ʧ��",
+                    "记录下载存档失败",
                     video_id=video_id,
                     yt_channel=channel_name
                 )
     except Exception as err:
         log_with_context(
             logger, logging.ERROR,
-            "��¼����浵����",
+            "记录下载存档异常",
             video_id=video_id,
             yt_channel=channel_name,
             error=str(err)
@@ -464,6 +543,7 @@ def get_ydl_opts(custom_opts=None):
     if not os.path.exists(AUDIO_FOLDER):
         os.makedirs(AUDIO_FOLDER)
         logger.info(f"已创建音频目录: {AUDIO_FOLDER}")
+    cleanup_incomplete_downloads(AUDIO_FOLDER)
 
     # 使用 .tmp 后缀来标记正在下载的文件
     # 注意：FFmpeg后处理器会替换文件扩展名，所以我们只用一个模板
@@ -477,7 +557,7 @@ def get_ydl_opts(custom_opts=None):
         "postprocessors": [
             {
                 "key": "FFmpegExtractAudio",
-                "preferredcodec": "aac",
+                "preferredcodec": "m4a",  # 使用 MP4/M4A 容器，确保时长元数据准确
                 "preferredquality": "64",
                 "nopostoverwrites": False,
             }
@@ -509,7 +589,11 @@ def get_ydl_opts(custom_opts=None):
 
 def progress_hook(d):
     if d['status'] == 'finished':
-        logger.trace(f"下载完成: {os.path.basename(d.get('filename', ''))}")
+        filename = os.path.basename(d.get('filename', ''))
+        # 跳过 yt-dlp 下载中间产生的 .tmp.fXXX 片段日志，避免重复噪音
+        if ".tmp.f" in filename:
+            return
+        logger.trace(f"下载完成: {filename}")
     elif d['status'] == 'already_downloaded':
         logger.trace(f"已存在: {d.get('title', '')}")
 
@@ -579,6 +663,9 @@ def dl_audio_latest(channel_name, audio_folder=None, group_name=None):
         'error': 0,
         'details': []
     }
+    # 兜底初始化，防止在拉取列表阶段异常时未赋值就被引用
+    video_title = None
+    video_id = None
     
     # 第一步：获取视频列表（使用测试脚本中成功的配置）
     list_opts = {
@@ -590,17 +677,6 @@ def dl_audio_latest(channel_name, audio_folder=None, group_name=None):
     
     with yt_dlp.YoutubeDL(list_opts) as list_ydl:
         try:
-            log_context = {
-                "yt_channel": channel_name,
-            }
-            if group_name:
-                log_context["tg_channel"] = group_name
-            
-            log_with_context(
-                logger, logging.INFO,
-                "开始获取频道视频列表",
-                **log_context
-            )
             # YouTube频道结构变化：直接访问 /videos 页面获取视频列表
             url = f"{yt_base_url}{channel_name}/videos"
             channel_info = list_ydl.extract_info(url, download=False)
@@ -628,16 +704,15 @@ def dl_audio_latest(channel_name, audio_folder=None, group_name=None):
                         if len(entries_to_download) >= max_videos:
                             break
             
-            logger.trace(f"频道返回 {len(entries_to_download)} 个有效视频")
-            
             # 记录找到的视频总数
             stats['total'] = len(entries_to_download)
             log_with_context(
                 logger, logging.INFO,
-                "频道视频列表获取完成",
+                "📋 频道视频列表获取完成",
                 yt_channel=channel_name,
                 total_videos=stats['total'],
-                max_to_process=max_videos
+                max_to_process=max_videos,
+                tg_channel=group_name if group_name else None
             )
 
             for idx, video_info in enumerate(entries_to_download, 1):
@@ -672,18 +747,19 @@ def dl_audio_latest(channel_name, audio_folder=None, group_name=None):
                     upload_date_str = video_info.get('upload_date')[4:]  # 取月日部分 MMDD
                     upload_date_str = f"{upload_date_str[:2]}-{upload_date_str[2:]}"
                 
-                log_with_context(
-                    logger, TRACE_LEVEL,
-                    f"检查视频 [{idx}/{stats['total']}] {video_id}",
-                    yt_channel=channel_name,
-                    title=video_title[:60] + "..." if len(video_title) > 60 else video_title,
-                    upload_date=upload_date_str
-                )
-                
-                # 应用过滤器（日期过滤、会员内容过滤等）
+                # 应用过滤器（日期过滤、会员内容过滤等）；命中过滤时直接记录跳过原因。
                 filter_result = combined_filter(video_info)
                 if filter_result:
-                    logger.trace(f"⏭️ 跳过视频（{filter_result}）: {video_title[:40]}")
+                    log_with_context(
+                        logger, TRACE_LEVEL,
+                        f"⏭️ 跳过视频（{filter_result}）",
+                        yt_channel=channel_name,
+                        title=video_title[:60] + "..." if len(video_title) > 60 else video_title,
+                        video_id=video_id,
+                        index=idx,
+                        total=stats['total'],
+                        upload_date=upload_date_str
+                    )
                     stats['filtered'] += 1
                     stats['details'].append({
                         'index': idx,
@@ -693,7 +769,7 @@ def dl_audio_latest(channel_name, audio_folder=None, group_name=None):
                         'reason': filter_result
                     })
                     continue
-                
+
                 # 构建文件名：{频道名}.{video_id}.{title}.m4a
                 uploader = video_info.get('uploader') or video_info.get('channel') or channel_name or 'UnknownChannel'
                 safe_uploader = sanitize_filename(uploader)
@@ -716,8 +792,8 @@ def dl_audio_latest(channel_name, audio_folder=None, group_name=None):
 
                 if os.path.exists(final_destination_audio_path):
                     log_with_context(
-                        logger, logging.INFO,
-                        f"⏭️  跳过 {video_id} (文件已存在)",
+                        logger, TRACE_LEVEL,
+                        f"⏭️  文件已存在，跳过 {video_id}",
                         yt_channel=channel_name
                     )
                     stats['already_exists'] += 1
@@ -744,14 +820,6 @@ def dl_audio_latest(channel_name, audio_folder=None, group_name=None):
                 current_video_ydl_opts = ydl_opts.copy()
                 # FFmpeg后处理器会将 filename.tmp 转换为 filename.tmp.m4a
                 current_video_ydl_opts['outtmpl'] = temp_audio_path_without_ext + '.tmp'
-
-                log_with_context(
-                    logger, TRACE_LEVEL,
-                    "下载路径配置",
-                    temp_template=f"{temp_audio_path_without_ext}.tmp",
-                    expected_temp=expected_temp_audio_path,
-                    final_destination=final_destination_audio_path
-                )
 
                 # 先检查过滤器（避免被过滤的视频被误报为下载失败）
                 filter_result = combined_filter(video_info)
@@ -811,8 +879,11 @@ def dl_audio_latest(channel_name, audio_folder=None, group_name=None):
                                     delay = random.uniform(video_delay_min, video_delay_max)
                                     log_with_context(
                                         logger, logging.INFO,
-                                        f"⏳ 等待 {round(delay)}秒",
-                                        yt_channel=channel_name
+                                        "⏳ 视频间延迟",
+                                        yt_channel=channel_name,
+                                        delay_seconds=round(delay, 2),
+                                        current_video=idx,
+                                        total_videos=stats['total']
                                     )
                                     time.sleep(delay)
                         else:
@@ -843,7 +914,7 @@ def dl_audio_latest(channel_name, audio_folder=None, group_name=None):
                                 logger.warning(f"找到原始下载文件: {potential_orig_file}，但未转换为 {expected_audio_ext}")
                                 break
                         if not original_downloaded_file_actual_ext:
-                            logger.error(f"原始下载文件也未找到 (尝试的模板: {temp_audio_path_without_ext}.*.tmp)")
+                            logger.error(f"🧩 原始下载文件也未找到 (尝试的模板: {temp_audio_path_without_ext}.*.tmp)")
 
                         stats['error'] += 1
                         stats['details'].append({
@@ -856,6 +927,7 @@ def dl_audio_latest(channel_name, audio_folder=None, group_name=None):
 
                 except yt_dlp.utils.DownloadError as de:
                     error_str = str(de)
+                    error_lower = error_str.lower()
                     if "already been recorded in the archive" in error_str:
                         log_with_context(
                             logger, logging.INFO,
@@ -873,7 +945,7 @@ def dl_audio_latest(channel_name, audio_folder=None, group_name=None):
                             'status': 'archived',
                             'reason': '已在存档中'
                         })
-                    elif "members-only" in error_str or "member" in error_str or "premium" in error_str or "subscriber" in error_str:
+                    elif "members-only" in error_lower or "member" in error_lower or "premium" in error_lower or "subscriber" in error_lower:
                         log_with_context(
                             logger, logging.INFO,
                             f"🔒 会员专属 {video_id} (下载被拒绝)",
@@ -887,7 +959,7 @@ def dl_audio_latest(channel_name, audio_folder=None, group_name=None):
                             'status': 'member_only',
                             'reason': '会员专属内容（下载时确认）'
                         })
-                    elif "premieres in" in error_str.lower() or "premiere" in error_str.lower():
+                    elif "premieres in" in error_lower or "premiere" in error_lower:
                         # YouTube Premiere（首映）视频，尚未到首映时间
                         premiere_info = error_str.split(":")[-1].strip() if ":" in error_str else "待首映"
                         log_with_context(
@@ -904,6 +976,24 @@ def dl_audio_latest(channel_name, audio_folder=None, group_name=None):
                             'status': 'premiere',
                             'reason': f'待首映: {premiere_info}'
                         })
+                    elif 'requested range not satisfiable' in error_lower or 'http error 416' in error_lower:
+                        removed_chunks = cleanup_partial_files_for_base(temp_audio_path_without_ext)
+                        log_with_context(
+                            logger, logging.WARNING,
+                            f'🧹 HTTP 416：检测到无效的下载范围，已清理残留片段 {video_id}',
+                            yt_channel=channel_name,
+                            video_id=video_id,
+                            removed_chunks=removed_chunks
+                        )
+                        stats['error'] += 1
+                        stats['details'].append({
+                            'index': idx,
+                            'title': video_title,
+                            'id': video_id,
+                            'status': 'error',
+                            'reason': 'HTTP 416 - range 无效'
+                        })
+                    
                     else:
                         # 简短的错误信息
                         error_msg = str(de)[:100] if len(str(de)) > 100 else str(de)
@@ -1274,61 +1364,133 @@ def dl_audio_story(channel_name: str, audio_folder: str, group_name: str, items_
     }
     list_opts = apply_js_runtime(list_opts)
 
-    story_url = f"{yt_base_url}{channel_name}/videos?view=0&sort=da"
+    last_ts_int: Optional[int] = None
+    if last_ts is not None:
+        try:
+            last_ts_int = int(last_ts)
+        except (TypeError, ValueError):
+            last_ts_int = None
+
+    timestamp_checkpoint_value = last_ts_int if last_ts_int is not None else last_ts
+
+    if last_ts_int is not None:
+        try:
+            cutoff_dt = datetime.datetime.fromtimestamp(
+                last_ts_int, tz=datetime.timezone.utc
+            )
+            dateafter_value = cutoff_dt.strftime("%Y%m%d")
+            list_opts["dateafter"] = dateafter_value
+            logger.trace(
+                f"📚 故事频道 {group_name} 使用 dateafter 过滤：{dateafter_value}"
+            )
+        except Exception as err:
+            logger.trace(
+                f"⚠️ 故事频道 {group_name} 设置 dateafter 失败，将回退到完整扫描: {err}"
+            )
+    selected_entries: list = []
+    items_limit = max(1, int(items_per_run or 1))
+    channel_url = f"{yt_base_url}{channel_name}/videos"
+
     try:
         with yt_dlp.YoutubeDL(list_opts) as list_ydl:
-            info_dict = list_ydl.extract_info(story_url, download=False)
-    except Exception as e:
+            channel_info = list_ydl.extract_info(channel_url, download=False)
+    except Exception as err:
         log_with_context(
-            logger, logging.ERROR,
-            "获取故事视频列表失败",
+            logger,
+            logging.ERROR,
+            "Story mode: failed to fetch channel entries",
             yt_channel=channel_name,
-            error=str(e)
+            error=str(err),
         )
         return False
 
-    entries = info_dict.get("entries") or []
-    flat_entries = []
-    for entry in entries:
-        if entry and entry.get("_type") == "playlist":
-            nested = entry.get("entries") or []
-            for sub in nested:
-                if sub:
-                    flat_entries.append(sub)
-        elif entry:
-            flat_entries.append(entry)
+    entries = []
+    raw_entries = channel_info.get("entries") if channel_info else None
+    if raw_entries is not None:
+        for entry in raw_entries:
+            if entry and isinstance(entry, dict):
+                entries.append(entry)
+    else:
+        log_with_context(
+            logger,
+            logging.WARNING,
+            "Story mode: channel returned no entries",
+            yt_channel=channel_name,
+        )
 
-    if not flat_entries:
-        logger.info(f"故事模式频道 {channel_name} 未找到视频")
-        return False
+    if entries:
+        if last_ts_int is not None:
+            for entry in entries:
+                entry_ts = _extract_timestamp_from_entry(entry)
+                if entry_ts is None:
+                    log_with_context(
+                        logger,
+                        TRACE_LEVEL,
+                        "Story mode: skip entry without timestamp while checkpoint is set",
+                        yt_channel=channel_name,
+                        video_id=entry.get("id"),
+                    )
+                    continue
+                if entry_ts <= last_ts_int:
+                    continue
+                selected_entries.append(entry)
+                if len(selected_entries) >= items_limit:
+                    break
+        else:
+            found_last_id = last_video_id is None
+            for entry in entries:
+                entry_id = entry.get("id")
+                if not found_last_id:
+                    if entry_id == last_video_id:
+                        found_last_id = True
+                    continue
+                selected_entries.append(entry)
+                if len(selected_entries) >= items_limit:
+                    break
+            if last_video_id and not found_last_id:
+                log_with_context(
+                    logger,
+                    logging.WARNING,
+                    "Story mode: checkpoint video not found, defaulting to earliest entries",
+                    yt_channel=channel_name,
+                    checkpoint_video=last_video_id,
+                )
+                selected_entries = entries[:items_limit]
+    else:
+        log_with_context(
+            logger,
+            logging.INFO,
+            "Story mode: no valid entries returned by channel",
+            yt_channel=channel_name,
+        )
 
-    selected = []
-    started = not (last_video_id or last_ts)
-    for entry in flat_entries:
-        video_id = entry.get("id")
-        ts = _extract_timestamp_from_entry(entry)
-        if not started:
-            if last_video_id and video_id == last_video_id:
-                started = True
-                continue
-            if last_ts and ts and ts <= last_ts:
-                continue
-        if started:
-            selected.append(entry)
-            if len(selected) >= max(1, items_per_run):
-                break
+    log_with_context(
+        logger,
+        logging.DEBUG,
+        "Story mode: prepared download batch",
+        yt_channel=channel_name,
+        total_entries=len(entries),
+        selected=len(selected_entries),
+        limit=items_limit,
+        last_timestamp=timestamp_checkpoint_value,
+        last_video_id=last_video_id,
+    )
 
-    if not selected:
-        selected = flat_entries[:max(1, items_per_run)]
-        logger.warning(
-            f"故事进度未命中，频道 {channel_name} 从头开始取 {len(selected)} 条"
+    if not selected_entries:
+        log_with_context(
+            logger,
+            logging.INFO,
+            "Story mode: no pending entries to download",
+            yt_channel=channel_name,
+            last_timestamp=timestamp_checkpoint_value,
+            last_video_id=last_video_id,
         )
 
     last_progress_id = None
     last_progress_ts = None
     downloaded = 0
 
-    for entry in selected:
+    for entry in selected_entries:
         video_id = entry.get("id") or ""
         if not video_id:
             continue

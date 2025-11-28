@@ -271,8 +271,8 @@ class NotionSyncService:
             from logger import log_with_context
             import logging
             log_with_context(
-                sys_logger, logging.DEBUG,
-                "Notion 日志批量上传完成",
+                sys_logger, logging.INFO,
+                "📤 Notion 日志批量上传完成",
                 total=len(logs),
                 success=success_count,
                 failed=failed_count

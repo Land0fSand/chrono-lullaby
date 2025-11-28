@@ -12,7 +12,14 @@
 mode: local
 
 log:
-  level: INFO           # 可选：全局日志级别（DEBUG/INFO/WARNING/ERROR）
+  level: INFO
+  single_file_mode: true
+  file:
+    max_bytes: 20971520
+    backup_count: 10
+
+debug:
+  enabled: false
 
 telegram:
   bot_token: "YOUR_TELEGRAM_BOT_TOKEN"

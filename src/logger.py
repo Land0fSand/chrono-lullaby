@@ -206,11 +206,61 @@ class LoggerManager:
         if not self._initialized:
             self.log_dir = Path(__file__).parent.parent / "logs"
             self.log_dir.mkdir(exist_ok=True)
+            self.single_file_mode = self._load_single_file_flag()
+            self.rotation_config = self._load_rotation_config()
             self.aggregate_handler = self._create_aggregate_handler()
             LoggerManager._initialized = True
         else:
+            if not hasattr(self, "single_file_mode"):
+                self.single_file_mode = self._load_single_file_flag()
+            if not hasattr(self, "rotation_config"):
+                self.rotation_config = self._load_rotation_config()
             if not hasattr(self, "aggregate_handler") or self.aggregate_handler is None:
                 self.aggregate_handler = self._create_aggregate_handler()
+
+    def _load_single_file_flag(self) -> bool:
+        """
+        Determine whether logs should all be stored inside all.log.
+        """
+        try:
+            import config as config_module
+            yaml_config = config_module.load_yaml_config() or {}
+            log_config = yaml_config.get('log') or yaml_config.get('logging') or {}
+            value = log_config.get('single_file_mode')
+            if isinstance(value, bool):
+                return value
+        except Exception:
+            pass
+        return True
+
+    def _load_rotation_config(self) -> dict:
+        """
+        Load rotation settings for the aggregated log file.
+        """
+        defaults = {
+            "max_bytes": 20 * 1024 * 1024,  # 20 MB
+            "backup_count": 10,
+        }
+        try:
+            import config as config_module
+            yaml_config = config_module.load_yaml_config() or {}
+            log_config = yaml_config.get('log') or yaml_config.get('logging') or {}
+            file_config = {}
+            if isinstance(log_config, dict):
+                file_config = log_config.get('file') or log_config.get('single_file')
+                if not isinstance(file_config, dict):
+                    file_config = log_config
+
+            max_bytes = file_config.get('max_bytes') or file_config.get('max_size')
+            backup_count = file_config.get('backup_count') or file_config.get('backups')
+
+            if isinstance(max_bytes, int) and max_bytes > 0:
+                defaults["max_bytes"] = max_bytes
+            if isinstance(backup_count, int) and backup_count >= 1:
+                defaults["backup_count"] = backup_count
+        except Exception:
+            pass
+        return defaults
 
     def _create_aggregate_handler(self) -> Optional[logging.Handler]:
         """
@@ -220,11 +270,11 @@ class LoggerManager:
             log_file = self.log_dir / "all.log"
             handler = logging.handlers.RotatingFileHandler(
                 log_file,
-                maxBytes=20 * 1024 * 1024,  # 20 MB
-                backupCount=10,
+                maxBytes=self.rotation_config.get("max_bytes", 20 * 1024 * 1024),
+                backupCount=self.rotation_config.get("backup_count", 10),
                 encoding='utf-8'
             )
-            handler.setLevel(logging.INFO)
+            handler.setLevel(logging.NOTSET)
             handler.setFormatter(JSONFormatter())
             return handler
         except Exception as exc:
@@ -274,7 +324,7 @@ class LoggerManager:
             logger.addHandler(console_handler)
 
         # 文件 Handler（JSONL 格式）
-        if file:
+        if file and not self.single_file_mode:
             # 主日志文件（所有级别）
             log_file = self.log_dir / f"{component}.log"
             file_handler = logging.handlers.RotatingFileHandler(
@@ -379,16 +429,20 @@ def get_system_logger() -> logging.Logger:
     logger.addHandler(console_handler)
 
     # 文件 Handler（JSONL 格式）- 系统日志
-    log_file = manager.log_dir / "system.log"
-    file_handler = logging.handlers.RotatingFileHandler(
-        log_file,
-        maxBytes=10 * 1024 * 1024,  # 10 MB
-        backupCount=5,
-        encoding='utf-8'
-    )
-    file_handler.setLevel(target_level)
-    file_handler.setFormatter(JSONFormatter())
-    logger.addHandler(file_handler)
+    if not manager.single_file_mode:
+        log_file = manager.log_dir / "system.log"
+        file_handler = logging.handlers.RotatingFileHandler(
+            log_file,
+            maxBytes=10 * 1024 * 1024,  # 10 MB
+            backupCount=5,
+            encoding='utf-8'
+        )
+        file_handler.setLevel(target_level)
+        file_handler.setFormatter(JSONFormatter())
+        logger.addHandler(file_handler)
+
+    if manager.aggregate_handler and manager.aggregate_handler not in logger.handlers:
+        logger.addHandler(manager.aggregate_handler)
 
     # 系统日志不添加 Notion Handler，确保完全本地化
     # 这样即使 Notion 同步出问题，系统日志也能正常工作

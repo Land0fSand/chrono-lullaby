@@ -1,6 +1,6 @@
 {
-  "last_cleanup_time": "2025-11-10T07:01:53.093025+00:00",
+  "last_cleanup_time": "2025-11-27T22:36:45.727522+00:00",
   "machine_id": "cb-pc-hp",
-  "keep_days": 30,
+  "keep_days": 14,
   "error_keep_days": 90
 }

@@ -173,14 +173,13 @@ ChronoLullaby 的日志系统分为两大类：
 | "⏳ 频道间延迟 - 准备处理频道 [{idx}/{total_channels}]" (带上下文) | 频道间延迟时 | INFO | chronolullaby.downloader | src/yt_dlp_downloader.py:124-132 |
 | "处理频道 [{idx}/{total_channels}]" (带上下文) | 处理频道时 | INFO | chronolullaby.downloader | src/yt_dlp_downloader.py:134-140 |
 | "下载频道失败" (带上下文) | 下载频道失败时 | ERROR | chronolullaby.downloader | src/yt_dlp_downloader.py:149-158 |
-| "本轮下载任务完成" | 本轮下载任务完成时 | INFO | chronolullaby.downloader | src/yt_dlp_downloader.py:160 |
 | "开始批量下载，共 {len(channels)} 个频道" | 开始批量下载（旧接口）时 | INFO | chronolullaby.downloader | src/yt_dlp_downloader.py:164 |
 | "处理频道 [{idx}/{len(channels)}]" (带上下文) | 处理频道（旧接口）时 | INFO | chronolullaby.downloader | src/yt_dlp_downloader.py:169-176 |
 | "下载频道失败" (带上下文，旧接口) | 下载频道失败（旧接口）时 | ERROR | chronolullaby.downloader | src/yt_dlp_downloader.py:181-188 |
 | "YouTube 下载器启动" | 下载器启动时 | INFO | chronolullaby.downloader | src/yt_dlp_downloader.py:194 |
 | "未找到任何频道组配置" | 未找到频道组配置时 | WARNING | chronolullaby.downloader | src/yt_dlp_downloader.py:202 |
 | "刷新频道组列表" (带上下文) | 刷新频道组列表时 | INFO | chronolullaby.downloader | src/yt_dlp_downloader.py:208-214 |
-| "等待下一轮下载" (带上下文) | 等待下一轮下载时 | INFO | chronolullaby.downloader | src/yt_dlp_downloader.py:221-227 |
+| "等待下一轮" (带上下文：wait_seconds/next_realtime_seconds/next_story/next_story_seconds 等) | 计算等待时间并休眠前 | INFO | chronolullaby.downloader | src/yt_dlp_downloader.py:304-329 |
 | "轮次间隔为0，立即开始下一轮（视频级延迟已足够拉开频率）" | 轮次间隔为0时 | INFO | chronolullaby.downloader | src/yt_dlp_downloader.py:230 |
 | "接收到停止信号，正在退出..." | 接收到停止信号时 | INFO | chronolullaby.downloader | src/yt_dlp_downloader.py:234 |
 | "下载器主循环发生未预期的错误" | 主循环发生错误时 | EXCEPTION | chronolullaby.downloader | src/yt_dlp_downloader.py:237 |

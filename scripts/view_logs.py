@@ -138,8 +138,7 @@ def main():
     )
     
     parser.add_argument('component', nargs='?', default='all',
-                        choices=['all', 'bot', 'downloader', 'launcher'],
-                        help='要查看的组件 (默认: all)')
+                        help='要查看的组件 (默认: all，可输入 bot/downloader/launcher 或子组件如 downloader.yt-dlp)')
     parser.add_argument('--level', '-l', choices=['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'],
                         help='按日志级别过滤')
     parser.add_argument('--filter', '-f', type=str,
@@ -156,27 +155,27 @@ def main():
     args = parser.parse_args()
     
     # 确定日志目录
-    project_root = Path(__file__).parent
+    script_root = Path(__file__).resolve().parent
+    project_root = script_root.parent
     logs_dir = project_root / 'logs'
+    if not logs_dir.exists():
+        logs_dir = script_root / 'logs'
     
     if not logs_dir.exists():
         print(colorize(f"错误: 日志目录不存在 {logs_dir}", 'ERROR'))
         sys.exit(1)
     
     # 选择日志文件
-    log_files = []
-    if args.component == 'all':
-        log_files = list(logs_dir.glob('*.log'))
-        log_files = [f for f in log_files if not f.name.endswith('_error.log')]
-    else:
-        log_file = logs_dir / f"{args.component}.log"
-        if log_file.exists():
-            log_files = [log_file]
+    log_files = sorted(
+        [f for f in logs_dir.glob('all.log*') if f.is_file()],
+        key=lambda f: f.stat().st_mtime
+    )
     
     if not log_files:
-        print(colorize("错误: 未找到日志文件", 'WARNING'))
-        print(colorize("提示: 请先运行程序生成日志", 'GRAY'))
+        print(colorize('错误: 未找到日志文件 all.log', 'WARNING'))
+        print(colorize('提示: 请先运行任一组件产生日志', 'GRAY'))
         sys.exit(1)
+    
     
     # 读取日志
     all_logs = []
@@ -185,8 +184,25 @@ def main():
         all_logs.extend(logs)
     
     # 应用过滤器
+    def _match_component(component_value: str) -> bool:
+        if args.component == 'all':
+            return True
+        if not component_value:
+            return False
+        normalized = component_value
+        if normalized.startswith('chronolullaby.'):
+            normalized = normalized[len('chronolullaby.'):]
+        if normalized == args.component or component_value == args.component:
+            return True
+        if normalized.startswith(f'{args.component}.'):
+            return True
+        base = normalized.split('.')[0]
+        return base == args.component
+
     filtered_logs = []
     for log in all_logs:
+        if not _match_component(log.get('component', '')):
+            continue
         # 级别过滤
         if args.level and log.get('level') != args.level:
             continue

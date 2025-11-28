@@ -48,7 +48,7 @@ if not CHAT_ID:
     logger.error("请在 config.yaml 或 .env 文件中配置 CHAT_ID")
     sys.exit(1)
 
-logger.info(f"配置加载成功：发送间隔 = {SEND_INTERVAL} 秒 ({SEND_INTERVAL/3600:.2f} 小时)")
+logger.info(f"🛠️ 配置加载成功：发送任务轮询间隔 = {SEND_INTERVAL} 秒 ({SEND_INTERVAL/3600:.2f} 小时)")
 
 def create_send_file_task(chat_id: str, audio_folder: str, group_name: str):
     """
@@ -236,20 +236,20 @@ def main():
     
     while retry_count < max_retries:
         try:
-            logger.info(f"启动Telegram Bot轮询 (尝试 {retry_count + 1}/{max_retries})")
+            logger.info(f"🤖 启动 Telegram Bot 轮询 (尝试 {retry_count + 1}/{max_retries})")
             application.run_polling(
                 drop_pending_updates=True,  # 忽略待处理的更新
             )
             break  # 成功运行，退出重试循环
         except NetworkError as e:
             retry_count += 1
-            logger.error(f"网络错误 (尝试 {retry_count}/{max_retries}): {e}")
+            logger.error(f"🌐 网络错误 (尝试 {retry_count}/{max_retries}): {e}")
             if retry_count < max_retries:
                 wait_time = min(60 * (2 ** retry_count), 600)  # 指数退避，最大10分钟
-                logger.info(f"等待 {wait_time} 秒后重试...")
+                logger.info(f"⏳ 等待 {wait_time} 秒后重试...")
                 time.sleep(wait_time)
             else:
-                logger.error("达到最大重试次数，程序退出")
+                logger.error("🛑 达到最大重试次数，程序退出")
                 raise
         except Exception as e:
             logger.error(f"意外错误: {e}")

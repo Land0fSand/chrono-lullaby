@@ -86,18 +86,10 @@ def record_sent_file(chat_id: str, video_id: str, title: str, channel_name: str 
         file_path = f"{channel_name or 'unknown'}.{video_id}.{title}.m4a"
         success = provider.add_sent_record(video_id, chat_id, title, file_path)
         
-        if success:
-            log_with_context(
-                logger, TRACE_LEVEL,
-                "已记录发送记录",
-                video_id=video_id,
-                channel_name=channel_name,
-                chat_id=chat_id
-            )
-        else:
+        if not success:
             log_with_context(
                 logger, logging.WARNING,
-                "记录发送记录失败（但不影响发送）",
+                "记录发送记录失败，可能影响发送",
                 video_id=video_id,
                 chat_id=chat_id
             )
@@ -149,13 +141,6 @@ async def send_file(
             continue # Move to the next file in the directory
 
         file_size_mb = os.path.getsize(file_path) / (1024 * 1024)  # 文件大小（MB）
-        log_with_context(
-            logger, logging.INFO,
-            "准备发送文件",
-            file_name=file_name,
-            size_mb=round(file_size_mb, 2)
-        )
-        
         if file_size_mb > 49: # Use a slightly lower threshold to be safe
             log_with_context(
                 logger, logging.INFO,
@@ -181,7 +166,7 @@ async def send_file(
                     file_name=file_name,
                     parts_count=len(split_files)
                 )
-                for split_file_path in split_files:
+                for idx, split_file_path in enumerate(split_files):
                     await send_single_file(
                         context,
                         chat_id,
@@ -235,6 +220,38 @@ def _cleanup_segment_files(base_name: str, ext: str) -> None:
             os.remove(segment_path)
         except OSError:
             pass
+
+
+def _probe_duration_seconds(file_path: str) -> Optional[int]:
+    """
+    使用 ffprobe 获取音频时长（秒）
+
+    Args:
+        file_path: 音频文件路径
+
+    Returns:
+        时长（向下取整）或 None
+    """
+    try:
+        probe = ffmpeg.probe(file_path)
+        duration_str = probe.get("format", {}).get("duration")
+        if duration_str is None:
+            return None
+        duration = float(duration_str)
+        if duration <= 0:
+            return None
+        # Telegram 如果收到略短的 duration 会提前结束播放，这里向上取整并额外补 1 秒
+        padded = math.ceil(duration) + 1
+        return max(1, padded)
+    except Exception as err:
+        log_with_context(
+            logger, logging.WARNING,
+            "获取音频时长失败，将由 Telegram 推断",
+            file_path=file_path,
+            error=str(err),
+            error_type=type(err).__name__
+        )
+        return None
 
 
 def _recursive_split_and_check(file_path, original_file_size_mb, num_parts_to_try, max_parts_cap, recursion_depth=0, max_recursion_depth=10):
@@ -390,12 +407,6 @@ async def send_single_file(
 
     try:
         file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
-        log_with_context(
-            logger, logging.INFO,
-            "正在发送文件",
-            file_name=os.path.basename(file_path),
-            size_mb=round(file_size_mb, 2)
-        )
         
         file_name_for_meta = os.path.basename(file_path)
         
@@ -415,6 +426,8 @@ async def send_single_file(
         
         # 使用频道名作为 performer
         performer = channel_name if channel_name else "Unknown"
+        # 主动提供精准时长，避免元数据时长不准确导致播放尾部被截断
+        duration_seconds = _probe_duration_seconds(file_path)
 
         with open(file_path, 'rb') as file_to_send:
             with suppress(TimedOut):
@@ -423,11 +436,21 @@ async def send_single_file(
                     audio=file_to_send,
                     title=title,
                     performer=performer,
+                    duration=duration_seconds,
                     # Consider adding duration if easily obtainable from ffmpeg.probe and passing it
                 )
         
         # 记录已发送的文件（包含频道名）
         record_sent_file(chat_id, video_id, base_title, channel_name)
+        log_with_context(
+            logger, logging.INFO,
+            "文件发送完成",
+            file_name=os.path.basename(file_path),
+            size_mb=round(file_size_mb, 2),
+            video_id=video_id,
+            channel_name=channel_name,
+            chat_id=chat_id
+        )
         
         group_label = group_name or str(chat_id)
         log_with_context(
