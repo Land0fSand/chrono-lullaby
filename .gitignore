@@ -120,6 +120,7 @@ mypy.ini
 
 # runtime data
 /data/
+/src/data/last_log_cleanup.json
 
 # logs and process info
 /logs/
