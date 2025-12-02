@@ -1548,14 +1548,31 @@ def dl_audio_story(channel_name: str, audio_folder: str, group_name: str, items_
             continue
 
         # 使用 Hook 捕获的真实路径
-        actual_temp_path = downloaded_file_info.get("path")
+        hook_reported_temp_path = downloaded_file_info.get("path")
+        actual_temp_path = hook_reported_temp_path
+        resolved_temp_path = None
+
+        candidate_paths = []
+        if actual_temp_path:
+            candidate_paths.append(actual_temp_path)
+            parent_dir, temp_filename = os.path.split(actual_temp_path)
+            if ".tmp.f" in temp_filename:
+                normalized_filename = re.sub(r"(\.tmp)\.f\d+(?=\.)", r"\1", temp_filename)
+                candidate_paths.append(os.path.join(parent_dir, normalized_filename))
+
+        for candidate in candidate_paths:
+            if candidate and os.path.exists(candidate):
+                resolved_temp_path = candidate
+                break
 
         # 如果 Hook 没拿到，尝试模糊查找
-        if not actual_temp_path:
+        if not resolved_temp_path:
             for f in os.listdir(target_folder):
                 if video_id in f and (f.endswith('.tmp.m4a') or f.endswith('.tmp')):
-                    actual_temp_path = os.path.join(target_folder, f)
+                    resolved_temp_path = os.path.join(target_folder, f)
                     break
+
+        actual_temp_path = resolved_temp_path
 
         if actual_temp_path and os.path.exists(actual_temp_path):
             if safe_rename_file(actual_temp_path, final_destination_audio_path):
@@ -1572,7 +1589,7 @@ def dl_audio_story(channel_name: str, audio_folder: str, group_name: str, items_
             else:
                 logger.error(f"故事视频重命名失败: {actual_temp_path}")
         else:
-            logger.error(f"未找到预期的临时文件 (hook path: {actual_temp_path})")
+            logger.error(f"未找到预期的临时文件 (hook path: {hook_reported_temp_path})")
 
     if last_progress_id:
         provider.update_story_progress(group_name, {
