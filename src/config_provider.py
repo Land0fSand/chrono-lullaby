@@ -1464,6 +1464,8 @@ class NotionConfigProvider(BaseConfigProvider):
             
 
             if sys_logger:
+                from logger import log_with_context
+                import logging
 
                 log_with_context(
 
