@@ -534,7 +534,7 @@ class LocalConfigProvider(BaseConfigProvider):
 
         """获取发送间隔（秒）"""
 
-        return self._get_config_value('telegram.send_interval', 4920)
+        return self._get_config_value('telegram.send_interval', 180)
 
     
 
@@ -1249,7 +1249,7 @@ class NotionConfigProvider(BaseConfigProvider):
 
         settings = self._load_global_settings()
 
-        return settings.get('send_interval', 4920)
+        return settings.get('send_interval', 180)
 
     
 

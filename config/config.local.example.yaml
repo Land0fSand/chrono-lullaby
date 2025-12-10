@@ -23,7 +23,7 @@ debug:
 
 telegram:
   bot_token: "YOUR_TELEGRAM_BOT_TOKEN"
-  send_interval: 4920
+  send_interval: 180
 
 downloader:
   download_interval: 0

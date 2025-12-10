@@ -19,7 +19,7 @@ log:
 # Telegram Bot 配置
 telegram:
   bot_token: "1234567890:ABCdefGHIjklMNOpqrsTUVwxyz"
-  send_interval: 4920  # 发送间隔（秒），默认82分钟
+  send_interval: 180  # 发送检查间隔（秒），默认3分钟
 
 # YouTube 下载器配置
 downloader:
@@ -50,7 +50,7 @@ channel_groups:
 | 配置项 | 必需 | 默认值 | 说明 |
 |--------|------|--------|------|
 | `bot_token` | ✅ | - | Bot Token（从 @BotFather 获取） |
-| `send_interval` | ❌ | 4920 | 发送文件任务间隔（秒） |
+| `send_interval` | ❌ | 180 | 发送检查间隔（秒） |
 
 ### 下载器配置
 
