@@ -39,19 +39,17 @@ _download_archive_cache = {
     "entries": set(),
 }
 
-_cleaned_audio_folders = set()
-
-
-def cleanup_incomplete_downloads(folder: str) -> int:
+def cleanup_incomplete_downloads(folder: str, force: bool = False) -> int:
     """
     删除音频目录中残留的 .tmp/.part 等未完成下载文件，避免下次继续下载报 416。
-    同一个目录只在进程生命周期内清理一次，防止重复日志。
+    
+    Args:
+        folder: 要清理的目录
+        force: 是否强制清理（True=总是清理，False=只记录日志但总是执行清理）
     """
     if not folder:
         return 0
     abs_folder = os.path.abspath(folder)
-    if abs_folder in _cleaned_audio_folders:
-        return 0
     path = Path(abs_folder)
     if not path.exists():
         return 0
@@ -81,7 +79,6 @@ def cleanup_incomplete_downloads(folder: str) -> int:
             removed_files=removed
         )
 
-    _cleaned_audio_folders.add(abs_folder)
     return removed
 
 
@@ -638,6 +635,9 @@ def dl_audio_latest(channel_name, audio_folder=None, group_name=None):
     if not os.path.exists(target_folder):
         os.makedirs(target_folder)
         logger.info(f"已创建音频目录: {target_folder}")
+    
+    # 清理目标目录中的残留临时文件
+    cleanup_incomplete_downloads(target_folder)
 
     # 从配置读取最大视频数（支持热重载）
     max_videos = get_max_videos_per_channel()
@@ -1344,6 +1344,9 @@ def dl_audio_story(channel_name: str, audio_folder: str, group_name: str, items_
 
     target_folder = audio_folder if audio_folder else AUDIO_FOLDER
     os.makedirs(target_folder, exist_ok=True)
+    
+    # 清理目标目录中的残留临时文件
+    cleanup_incomplete_downloads(target_folder)
 
     provider = get_config_provider()
     progress: dict = {}

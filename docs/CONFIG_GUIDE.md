@@ -215,7 +215,7 @@ A: 需要提供 YouTube Cookies：
 
 ## 更多文档
 
-- [使用文档](README.md)
+- [主文档](../readme.md)
 - [/chatid 命令说明](CHATID_COMMAND.md)
 
 ---

@@ -104,6 +104,43 @@ def record_sent_file(chat_id: str, video_id: str, title: str, channel_name: str 
         )
 
 
+def _get_segment_index_from_filename(filename: str) -> int:
+    """
+    从文件名中提取分段索引号
+    
+    Args:
+        filename: 文件名（不含路径）
+    
+    Returns:
+        分段索引（0, 1, 2...），如果不是分段文件则返回 math.inf
+    """
+    base_name = os.path.splitext(filename)[0]
+    if '_' not in base_name:
+        return math.inf
+    suffix = base_name.rsplit('_', 1)[-1]
+    return int(suffix) if suffix.isdigit() else math.inf
+
+
+def _is_segment_file(filename: str) -> bool:
+    """判断文件是否是分段文件（以 _数字 结尾）"""
+    base_name = os.path.splitext(filename)[0]
+    if '_' not in base_name:
+        return False
+    suffix = base_name.rsplit('_', 1)[-1]
+    return suffix.isdigit()
+
+
+def _get_segment_base_name(filename: str) -> str:
+    """获取分段文件的基础名称（去除 _数字 后缀）"""
+    base_name = os.path.splitext(filename)[0]
+    ext = os.path.splitext(filename)[1]
+    if '_' in base_name:
+        parts = base_name.rsplit('_', 1)
+        if parts[-1].isdigit():
+            return parts[0] + ext
+    return filename
+
+
 async def send_file(
     context: ContextTypes.DEFAULT_TYPE,
     chat_id,
@@ -121,24 +158,52 @@ async def send_file(
              and '.tmp.' not in f]  # 也过滤掉 .tmp.m4a 这种格式
     if not files:
         return
-    # 按文件创建时间排序，确保最早的文件先发送
-    files.sort(key=lambda x: os.path.getctime(os.path.join(audio_folder, x)))
-    for file_name in files:
-        file_path = os.path.join(audio_folder, file_name)
+    
+    # 分离分段文件和普通文件
+    segment_files = [f for f in files if _is_segment_file(f)]
+    normal_files = [f for f in files if not _is_segment_file(f)]
+    
+    # 按文件创建时间排序普通文件，确保最早的文件先发送
+    normal_files.sort(key=lambda x: os.path.getctime(os.path.join(audio_folder, x)))
+    
+    # 优先处理残留的分段文件（按正确顺序发送）
+    if segment_files:
+        # 按基础名称分组
+        segment_groups = {}
+        for f in segment_files:
+            base = _get_segment_base_name(f)
+            if base not in segment_groups:
+                segment_groups[base] = []
+            segment_groups[base].append(f)
         
-        # Skip already segmented files (e.g., those ending with _1.mp3, _2.mp3)
-        # to avoid trying to re-segment them if a previous run failed mid-sending.
-        if '_' in os.path.splitext(file_name)[0] and os.path.splitext(file_name)[0].split('_')[-1].isdigit():
-            logger.info(f"跳过已分段文件: {file_name}")
-            # We will send these individual segments directly if they are valid
-            await send_single_file(
-                context,
-                chat_id,
-                file_path,
-                group_name=group_name,
+        # 对每组分段文件按数字后缀排序后发送
+        for base_name, group_files in segment_groups.items():
+            # 按分段索引排序（0, 1, 2...）
+            group_files.sort(key=_get_segment_index_from_filename)
+            log_with_context(
+                logger, logging.INFO,
+                "发送残留分段文件组",
+                base_name=base_name,
+                segment_count=len(group_files)
             )
-            os.remove(file_path) # Remove after attempting to send
-            continue # Move to the next file in the directory
+            for seg_file in group_files:
+                file_path = os.path.join(audio_folder, seg_file)
+                await send_single_file(
+                    context,
+                    chat_id,
+                    file_path,
+                    group_name=group_name,
+                )
+                try:
+                    os.remove(file_path)
+                    logger.trace(f"已删除分段文件: {seg_file}")
+                except OSError as e:
+                    logger.error(f"删除分段文件失败: {seg_file}, 错误: {e}")
+        return  # 处理完分段文件后返回，下次再处理普通文件
+    
+    # 处理普通文件
+    for file_name in normal_files:
+        file_path = os.path.join(audio_folder, file_name)
 
         file_size_mb = os.path.getsize(file_path) / (1024 * 1024)  # 文件大小（MB）
         if file_size_mb > 49: # Use a slightly lower threshold to be safe

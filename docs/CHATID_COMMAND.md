@@ -123,4 +123,4 @@ application.add_handler(CommandHandler("chatid", show_chat_id))
 ## 相关文档
 
 - [配置指南](CONFIG_GUIDE.md)
-- [使用文档](README.md)
+- [主文档](../readme.md)

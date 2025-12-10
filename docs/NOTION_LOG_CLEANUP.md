@@ -1,5 +1,43 @@
 # Notion 日志清理指南
 
+## 快速参考
+
+### 推荐：自动清理（config.yaml 配置）
+
+```yaml
+notion:
+  sync:
+    auto_cleanup:
+      enabled: true               # 启用自动清理
+      check_interval_days: 7      # 每 7 天检查一次
+      keep_days: 30               # 普通日志保留 30 天
+      error_keep_days: 90         # 错误日志保留 90 天
+```
+
+### 手动清理命令
+
+```powershell
+# 预览（不实际删除）
+ch clean-notion-logs --days 30
+
+# 确认执行
+ch clean-notion-logs --days 30 --confirm
+
+# 只清理 INFO 日志
+ch clean-notion-logs --days 30 --levels INFO --confirm
+```
+
+### 常用参数
+
+| 参数 | 说明 | 示例 |
+|------|------|------|
+| `--days N` | 保留最近 N 天 | `--days 30` |
+| `--levels` | 指定级别 | `--levels INFO WARNING` |
+| `--types` | 指定类型 | `--types downloader bot` |
+| `--confirm` | 确认执行 | `--confirm` |
+
+---
+
 ## 概述
 
 ChronoLullaby 的日志会自动上传到 Notion 数据库。长期运行后，日志数据库可能会不断膨胀，影响性能和查询速度。本工具提供了灵活的日志清理功能。
