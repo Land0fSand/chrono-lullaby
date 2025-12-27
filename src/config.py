@@ -223,29 +223,45 @@ def get_config_value(key_path: str, default: Any = None, reload: bool = False) -
 # 加载环境变量（如果没有 YAML 配置则使用）
 load_dotenv(ENV_FILE)
 
-# 音频文件夹：优先使用 YAML，否则使用默认值
+# 音频文件夹：优先从 Provider 获取
 def get_audio_folder() -> str:
     """获取音频文件夹路径"""
-    # 从 YAML 获取第一个频道组的音频目录
-    channel_groups = get_config_value('channel_groups', [])
-    if channel_groups and len(channel_groups) > 0:
-        folder = channel_groups[0].get('audio_folder', 'au')
-        return os.path.join(PROJECT_ROOT, folder)
+    try:
+        provider = get_config_provider()
+        channel_groups = provider.get_channel_groups()
+        if channel_groups and len(channel_groups) > 0:
+            folder = channel_groups[0].get('audio_folder')
+            if folder:
+                return os.path.join(PROJECT_ROOT, folder)
+    except Exception:
+        pass
+        
+    # 回退默认值
     return os.path.join(PROJECT_ROOT, "au")
 
 def get_cookies_file() -> str:
     """获取 Cookies 文件路径"""
-    cookies_file = get_config_value('downloader.cookies_file', 'config/youtube.cookies')
-    if os.path.isabs(cookies_file):
-        return cookies_file
-    return os.path.join(PROJECT_ROOT, cookies_file)
+    # 既然 Notion 模式下 Cookies 内容是动态拉取的
+    # 我们只需要一个固定的本地路径来存放它
+    # 优先读配置，读不到就用默认值
+    path = get_config_value('downloader.cookies_file')
+    if not path:
+        path = 'config/youtube.cookies'
+        
+    if os.path.isabs(path):
+        return path
+    return os.path.join(PROJECT_ROOT, path)
 
 def get_download_archive() -> str:
     """获取下载存档文件路径"""
-    archive_file = get_config_value('downloader.download_archive', 'data/download_archive.txt')
-    if os.path.isabs(archive_file):
-        return archive_file
-    return os.path.join(PROJECT_ROOT, archive_file)
+    # 同样，这只是一个本地同步文件的路径
+    path = get_config_value('downloader.download_archive')
+    if not path:
+        path = 'data/download_archive.txt'
+        
+    if os.path.isabs(path):
+        return path
+    return os.path.join(PROJECT_ROOT, path)
 
 def get_sent_archive_path(chat_id: str, readable: bool = False) -> str:
     """
@@ -292,13 +308,15 @@ def get_telegram_token(group_index: int = 0) -> Optional[str]:
 
 def get_telegram_chat_id() -> Optional[str]:
     """获取 Telegram Chat ID"""
-    # 优先从 YAML 读取第一个频道组的 chat_id
-    channel_groups = get_config_value('channel_groups', [])
+    # 1. 尝试通过 Provider 获取 (支持 Notion 和 Local)
+    provider = get_config_provider()
+    channel_groups = provider.get_channel_groups()
     if channel_groups and len(channel_groups) > 0:
         chat_id = channel_groups[0].get('telegram_chat_id')
         if chat_id and chat_id != "YOUR_CHAT_ID_HERE":
-            return chat_id
-    # 回退到环境变量
+            return str(chat_id)
+            
+    # 2. 回退到环境变量
     return os.environ.get("CHAT_ID")
 
 def get_send_interval() -> int:

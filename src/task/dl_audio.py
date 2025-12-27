@@ -385,6 +385,56 @@ def record_download_entry(video_id: str, channel_name: Optional[str]) -> None:
         )
 
 
+def sync_download_archive():
+    """从 Provider 同步已下载记录到本地文件，供 yt-dlp 使用"""
+    try:
+        provider = get_config_provider()
+        if not provider:
+            return
+
+        # 检查是否是 NotionConfigProvider (只有 Notion 模式需要同步)
+        if provider.__class__.__name__ != 'NotionConfigProvider':
+            return
+
+        # 获取 Notion 记录 (利用私有方法或缓存)
+        # 注意: 这里假设 Provider 实现了 _load_download_archive 返回 set
+        fetch_method = getattr(provider, "_load_download_archive", None)
+        if not callable(fetch_method):
+            return
+
+        notion_records = fetch_method()
+        if not notion_records:
+            return
+
+        # 读取本地文件记录
+        local_records = set()
+        if os.path.exists(DOWNLOAD_ARCHIVE):
+            try:
+                with open(DOWNLOAD_ARCHIVE, 'r', encoding='utf-8') as f:
+                    for line in f:
+                        line = line.strip()
+                        if line and not line.startswith('#'):
+                             parts = line.split()
+                             if parts:
+                                 local_records.add(parts[-1])
+            except Exception:
+                pass
+        
+        # 找出差异 (Notion 有但本地没有的)
+        new_records = notion_records - local_records
+        
+        if new_records:
+            logger.info(f"📥 从 Notion 同步了 {len(new_records)} 条下载历史到本地 Archive")
+            # 确保目录存在
+            os.makedirs(os.path.dirname(DOWNLOAD_ARCHIVE), exist_ok=True)
+            with open(DOWNLOAD_ARCHIVE, 'a', encoding='utf-8') as f:
+                for vid in new_records:
+                    f.write(f"youtube {vid}\n")
+                    
+    except Exception as e:
+        logger.warning(f"同步下载存档失败: {e}")
+
+
 def ensure_cookies_available() -> bool:
     """
     确保 cookies 文件可用：
@@ -416,7 +466,10 @@ def ensure_cookies_available() -> bool:
         return os.path.exists(COOKIES_FILE)
 
     if not content or not content.strip():
-        logger.warning("从 Notion 未获取到有效 cookies 数据")
+        # 如果是 Notion 模式但没配 Cookies，可能是有意的？
+        # 但我们还是检查本地有没有，有就用
+        if is_notion_mode and not os.path.exists(COOKIES_FILE):
+             logger.warning("Notion 中未配置 Cookies，且本地无 Cookies 文件，下载可能会受限")
         return os.path.exists(COOKIES_FILE)
 
     target_dir = os.path.dirname(COOKIES_FILE)
@@ -426,7 +479,7 @@ def ensure_cookies_available() -> bool:
     try:
         with open(COOKIES_FILE, "w", encoding="utf-8") as f:
             f.write(content)
-        logger.info(f"已从 Notion 同步 cookies 至本地: {COOKIES_FILE}")
+        logger.info(f"🍪 已从 Notion 同步 Cookies 至本地: {COOKIES_FILE}")
         return True
     except Exception as err:
         logger.error(f"写入 cookies 文件失败: {err}")
@@ -520,9 +573,11 @@ def oneday_filter(info_dict):
 
 def check_cookies():
     """检查cookies文件是否存在且有效"""
+    # 总是尝试调用 ensure_cookies_available，让它内部决定是否需要从 Notion 拉取
+    if ensure_cookies_available():
+        return True
+        
     if not os.path.exists(COOKIES_FILE):
-        if ensure_cookies_available() and os.path.exists(COOKIES_FILE):
-            return True
         logger.error("未找到cookies文件！")
         logger.info("请按以下步骤操作：")
         logger.info("1. 安装Chrome扩展：'Cookie-Editor'")
@@ -638,6 +693,9 @@ def dl_audio_latest(channel_name, audio_folder=None, group_name=None):
     
     # 清理目标目录中的残留临时文件
     cleanup_incomplete_downloads(target_folder)
+    
+    # 同步 Notion 中的下载历史到本地 Archive (供 yt-dlp 去重)
+    sync_download_archive()
 
     # 从配置读取最大视频数（支持热重载）
     max_videos = get_max_videos_per_channel()
