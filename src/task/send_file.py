@@ -148,8 +148,16 @@ async def send_file(
     group_name: Optional[str] = None,
 ) -> None:
     if not os.path.exists(audio_folder):
-        logger.warning(f"音频文件夹不存在: {audio_folder}")
-        return
+        try:
+            os.makedirs(audio_folder, exist_ok=True)
+            log_with_context(
+                logger, logging.INFO, 
+                f"自动创建缺失的音频目录", 
+                path=audio_folder
+            )
+        except OSError as e:
+            logger.error(f"无法创建/访问音频文件夹: {audio_folder}, 错误: {e}")
+            return
     # 过滤掉隐藏文件和临时文件(.tmp后缀或包含.tmp.)
     files = [f for f in os.listdir(audio_folder) 
              if os.path.isfile(os.path.join(audio_folder, f)) 
