@@ -169,10 +169,13 @@ def _resolve_js_runtime_path(raw_path: str) -> str:
 
 def _detect_js_runtime():
     """
-    检测可用的 JavaScript 运行时（默认为 Deno）
+    检测可用的 JavaScript 运行时
     - 支持通过环境变量 YT_DLP_JS_RUNTIME=runtime_name:/path/to/bin 覆盖
-    - 默认回退到 ~/.deno/bin/deno(.exe)
+    - 优先检测 Deno (~/.deno/bin/deno)
+    - 其次检测 Node (PATH 中的 node 命令)
     """
+    import shutil
+    
     runtime_override = os.environ.get("YT_DLP_JS_RUNTIME")
     if runtime_override:
         runtime_name, _, runtime_path = runtime_override.partition(':')
@@ -190,6 +193,7 @@ def _detect_js_runtime():
             logger.trace(f"使用环境变量指定的 JavaScript 运行时: {runtime_name} (PATH 搜索)")
         return runtime_config
 
+    # 1. 优先检测 Deno
     home_dir = os.path.expanduser("~")
     deno_binary = os.path.join(
         home_dir,
@@ -200,6 +204,18 @@ def _detect_js_runtime():
     if os.path.exists(deno_binary):
         logger.info(f"检测到 Deno 运行时，将用于解析 YouTube n signature: {deno_binary}")
         return {'deno': {'path': deno_binary}}
+    
+    # 2. 检测 PATH 中的 Node.js（需要 Node 20.0.0+）
+    node_path = shutil.which("node")
+    if node_path:
+        logger.info(f"检测到 Node.js 运行时，将用于解析 YouTube n signature: {node_path}")
+        return {'node': {'path': node_path}}
+    
+    # 3. 检测 PATH 中的 Deno
+    deno_path = shutil.which("deno")
+    if deno_path:
+        logger.info(f"检测到 Deno 运行时 (PATH)，将用于解析 YouTube n signature: {deno_path}")
+        return {'deno': {'path': deno_path}}
 
     logger.warning("未检测到可用的 JavaScript 运行时，YouTube 下载可能失败 (缺少 Deno/Node/Bun/QuickJS)")
     return None

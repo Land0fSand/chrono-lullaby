@@ -1,0 +1,133 @@
+2025-12-28 23:55:54 | [32mINFO    [0m | system       | 纭畾閰嶇疆妯″紡
+鉁?浣跨敤鏈湴閰嶇疆妯″紡
+2025-12-28 23:55:54 | [32mINFO    [0m | system       | 鏈湴閰嶇疆鎻愪緵鑰呭垵濮嬪寲鎴愬姛
+鉁?浣跨敤 config.yaml 閰嶇疆鏂囦欢
+2025-12-28 23:55:54 | [32mINFO    [0m | system       | 纭畾閰嶇疆妯″紡
+鉁?浣跨敤 Notion 杩滅▼閰嶇疆妯″紡
+2025-12-28 23:55:54 | [32mINFO    [0m | system       | Notion 閰嶇疆鎻愪緵鑰呭垵濮嬪寲鎴愬姛
+# 浠?Notion 瀵煎嚭鐨勯厤缃?(鎵€鏈夐閬撶粍宸茬鐢?
+mode: local
+telegram:
+  bot_token: 8039387573:AAFh77N4phZwde25FJIVs5J6ekQZFXyDRNA
+  send_interval: 278
+downloader:
+  download_interval: 5220
+  filter_days: 2
+  max_videos_per_channel: 4
+  channel_delay_min: 180
+  channel_delay_max: 480
+  video_delay_min: 90
+  video_delay_max: 360
+channel_groups:
+- name: 鍞忓檽闆昏嚭-绉戞妧
+  enabled: false
+  telegram_chat_id: '-1002794044093'
+  audio_folder: au/xixu1
+  youtube_channels:
+  - '@StorytellerFan'
+  - '@bestpartners'
+  - '@TheValley101'
+- name: 鍞忓檽闆昏嚭-鍔╃湢
+  enabled: false
+  telegram_chat_id: '-1002977407798'
+  audio_folder: au/xixu4
+  youtube_channels:
+  - '@BEWATER666'
+  - '@wenzhaostudio'
+  - '@laoliang1972'
+- name: 鍞忓槝鐢靛彴-鏀胯珫
+  enabled: false
+  telegram_chat_id: '-1002441077579'
+  audio_folder: au/xixu0
+  youtube_channels:
+  - '@meowsir'
+  - '@wuyuesanren'
+  - '@polishingtheturd6859'
+  - '@WuJianMin'
+  - '@wenzhaoofficial'
+  - '@wangzhian'
+  - '@澶稿厠璇?
+  - '@SydneyDaddy1'
+  - '@MrMarmot8'
+  - '@鐤媯鑰佺墰'
+- name: 鍞忓檽闆昏嚭-璨＄稉
+  enabled: false
+  telegram_chat_id: '-1003128921390'
+  audio_folder: au/xixu2
+  youtube_channels:
+  - '@cui_news'
+  - '@ltshijie'
+- name: 鍞忓檽闆昏嚭-鍊欒
+  enabled: false
+  telegram_chat_id: '-1003146511463'
+  audio_folder: au/xixu5
+  youtube_channels:
+  - '@JHCCF'
+  - '@ChenfengDigest'
+- name: 鍞忓檽闆昏嚭-杌嶄簨
+  enabled: false
+  telegram_chat_id: '-1003009109556'
+  audio_folder: au/xixu3
+  youtube_channels:
+  - '@Mr.F'
+- name: 寰蜂簯绀剧浉澹?
+  enabled: false
+  telegram_chat_id: '-1003434836608'
+  audio_folder: au/story02
+  youtube_channels:
+  - '@DeyunClub'
+  channel_type: story
+  story_interval_seconds: 80000
+  story_items_per_run: 1
+  story_last_video_id: 1jDafgH-b7k
+  story_last_timestamp: 1649751991
+  story_last_run_ts: 1764057716
+- name: 鎬€鏃ч噾鏇?
+  enabled: false
+  telegram_chat_id: '-1003308596142'
+  audio_folder: au/story01
+  youtube_channels:
+  - '@xiaoyange119'
+  channel_type: story
+  story_interval_seconds: 340000
+  story_items_per_run: 1
+  story_last_video_id: OL4eLBZmcWY
+  story_last_timestamp: 1738810418
+  story_last_run_ts: 1766799333
+- name: 涓夊柕
+  enabled: false
+  telegram_chat_id: '-1003303731000'
+  audio_folder: au/meowsir
+  youtube_channels:
+  - '@meowsir'
+  channel_type: story
+  story_interval_seconds: 90000
+  story_items_per_run: 1
+  story_last_video_id: dXYIoI_fHjY
+  story_last_timestamp: 1656897534
+  story_last_run_ts: 1766888734
+- name: 鎽囨粴閲戞洸
+  enabled: false
+  telegram_chat_id: '-1003308596142'
+  audio_folder: au/story01
+  youtube_channels:
+  - '@ClassicRockMusic01'
+  channel_type: story
+  story_interval_seconds: 280000
+  story_items_per_run: 1
+  story_last_video_id: UindoD6X8lY
+  story_last_timestamp: 1751537706
+  story_last_run_ts: 1766734342
+- name: 娴佽閲戞洸
+  enabled: false
+  telegram_chat_id: '-1003308596142'
+  audio_folder: au/story01
+  youtube_channels:
+  - '@PopMusic8386'
+  channel_type: story
+  story_interval_seconds: 290000
+  story_items_per_run: 1
+  story_last_video_id: wlihY3cF7Ng
+  story_last_timestamp: 1740916484
+  story_last_run_ts: 1766739458
+

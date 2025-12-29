@@ -907,10 +907,25 @@ class LocalConfigProvider(BaseConfigProvider):
 
 
     def get_story_progress(self, group_name: str) -> Dict[str, Any]:
-
+        # 优先从 story_progress.json 读取
         progress = self._load_story_progress()
-
-        return progress.get(group_name, {})
+        if group_name in progress and progress[group_name]:
+            return progress[group_name]
+        
+        # 如果没有，尝试从 config.yaml 的 channel_groups 读取初始进度
+        channel_groups = self.get_channel_groups()
+        for group in channel_groups:
+            if group.get('name') == group_name:
+                initial_progress = {}
+                if group.get('story_last_video_id'):
+                    initial_progress['last_video_id'] = group['story_last_video_id']
+                if group.get('story_last_timestamp') is not None:
+                    initial_progress['last_timestamp'] = group['story_last_timestamp']
+                if group.get('story_last_run_ts') is not None:
+                    initial_progress['last_run_ts'] = group['story_last_run_ts']
+                return initial_progress
+        
+        return {}
 
 
 

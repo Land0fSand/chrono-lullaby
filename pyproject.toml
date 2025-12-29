@@ -20,6 +20,7 @@ python-telegram-bot = {extras = ["job-queue"], version = "^22.0"}
 browser-cookie3 = "^0.19.1"
 PyYAML = "^6.0"
 notion-client = "^2.2.1"
+yt-dlp-ejs = "^0.3.2"
 
 [tool.poetry.group.dev.dependencies]
 # 可选：开发依赖（如测试工具），目前留空

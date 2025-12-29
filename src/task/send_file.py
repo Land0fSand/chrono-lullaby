@@ -4,6 +4,7 @@ import sys
 import math
 import glob
 import logging
+import asyncio
 import ffmpeg # type: ignore
 from typing import Optional
 
@@ -247,6 +248,7 @@ async def send_file(
                         group_name=group_name,
                     )
                     try:
+                        await asyncio.sleep(1)  # 等待文件句柄释放
                         os.remove(split_file_path)  # 发送后删除临时文件
                         logger.trace(f"已删除切割文件: {split_file_path}")
                     except OSError as e:
@@ -266,6 +268,7 @@ async def send_file(
                 group_name=group_name,
             )
             try:
+                await asyncio.sleep(1)  # 等待文件句柄释放
                 os.remove(file_path)  # 发送后删除文件
                 logger.info(f"已删除文件: {file_path}")
             except OSError as e:
