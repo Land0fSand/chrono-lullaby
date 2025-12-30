@@ -16,7 +16,6 @@ if sys.stderr.encoding != 'utf-8':
 
 from telegram.ext import ContextTypes
 from telegram.error import TimedOut, TelegramError
-from contextlib import suppress
 from logger import get_logger, log_with_context, TRACE_LEVEL
 from config import get_sent_archive_path, get_config_provider
 
@@ -481,62 +480,54 @@ async def send_single_file(
         logger.error(f"文件不存在或为空，跳过发送: {file_path}")
         return
 
-    try:
-        file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
-        
-        file_name_for_meta = os.path.basename(file_path)
-        
-        # 从文件名中提取频道名、视频ID和标题
-        channel_name, video_id, base_title = extract_video_info_from_filename(file_name_for_meta)
-        
-        # 处理分段文件的标题显示
-        base_name = os.path.splitext(file_name_for_meta)[0]
-        if '_' in base_name:
-            parts = base_name.split('_')
-            if parts[-1].isdigit():
-                title = f"{base_title} (Part {int(parts[-1]) + 1})"  # 1-indexed for display
-            else:
-                title = base_title
+    file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
+    file_name_for_meta = os.path.basename(file_path)
+    
+    # 从文件名中提取频道名、视频ID和标题
+    channel_name, video_id, base_title = extract_video_info_from_filename(file_name_for_meta)
+    
+    # 处理分段文件的标题显示
+    base_name = os.path.splitext(file_name_for_meta)[0]
+    if '_' in base_name:
+        parts = base_name.split('_')
+        if parts[-1].isdigit():
+            title = f"{base_title} (Part {int(parts[-1]) + 1})"  # 1-indexed for display
         else:
             title = base_title
-        
-        # 使用频道名作为 performer
-        performer = channel_name if channel_name else "Unknown"
-        # 主动提供精准时长，避免元数据时长不准确导致播放尾部被截断
-        duration_seconds = _probe_duration_seconds(file_path)
-
+    else:
+        title = base_title
+    
+    # 使用频道名作为 performer
+    performer = channel_name if channel_name else "Unknown"
+    # 主动提供精准时长，避免元数据时长不准确导致播放尾部被截断
+    duration_seconds = _probe_duration_seconds(file_path)
+    group_label = group_name or str(chat_id)
+    
+    # 追踪发送状态
+    send_succeeded = False
+    
+    try:
         with open(file_path, 'rb') as file_to_send:
-            with suppress(TimedOut):
-                await context.bot.send_audio(
-                    chat_id=chat_id,
-                    audio=file_to_send,
-                    title=title,
-                    performer=performer,
-                    duration=duration_seconds,
-                    # Consider adding duration if easily obtainable from ffmpeg.probe and passing it
-                )
+            await context.bot.send_audio(
+                chat_id=chat_id,
+                audio=file_to_send,
+                title=title,
+                performer=performer,
+                duration=duration_seconds,
+                read_timeout=120,  # 增加超时时间
+                write_timeout=120,
+            )
+        send_succeeded = True  # 只有真正发送成功才设为 True
         
-        # 记录已发送的文件（包含频道名）
-        record_sent_file(chat_id, video_id, base_title, channel_name)
+    except TimedOut as te:
+        # 超时不再静默吞掉，而是记录日志
         log_with_context(
-            logger, logging.INFO,
-            "文件发送完成",
+            logger, logging.WARNING,
+            "发送超时",
             file_name=os.path.basename(file_path),
-            size_mb=round(file_size_mb, 2),
-            video_id=video_id,
-            channel_name=channel_name,
-            chat_id=chat_id
-        )
-        
-        group_label = group_name or str(chat_id)
-        log_with_context(
-            logger,
-            logging.INFO,
-            f"频道组 {group_label} 发送音频《{title}》",
-            telegram_chat_id=chat_id,
-            youtube_channel=channel_name,
-            video_id=video_id,
-            audio_title=title,
+            chat_id=chat_id,
+            group_name=group_label,
+            error=str(te)
         )
     except TelegramError as te:
         log_with_context(
@@ -557,3 +548,25 @@ async def send_single_file(
             error_type=type(e).__name__
         )
         # Do not remove the file if sending failed
+    
+    # 只有发送成功才记录和打日志
+    if send_succeeded:
+        record_sent_file(chat_id, video_id, base_title, channel_name)
+        log_with_context(
+            logger, logging.INFO,
+            "文件发送完成",
+            file_name=os.path.basename(file_path),
+            size_mb=round(file_size_mb, 2),
+            video_id=video_id,
+            channel_name=channel_name,
+            chat_id=chat_id
+        )
+        log_with_context(
+            logger,
+            logging.INFO,
+            f"频道组 {group_label} 发送音频《{title}》",
+            telegram_chat_id=chat_id,
+            youtube_channel=channel_name,
+            video_id=video_id,
+            audio_title=title,
+        )
