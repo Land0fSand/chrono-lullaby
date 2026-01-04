@@ -196,17 +196,20 @@ async def send_file(
             )
             for seg_file in group_files:
                 file_path = os.path.join(audio_folder, seg_file)
-                await send_single_file(
+                send_success = await send_single_file(
                     context,
                     chat_id,
                     file_path,
                     group_name=group_name,
                 )
-                try:
-                    os.remove(file_path)
-                    logger.trace(f"已删除分段文件: {seg_file}")
-                except OSError as e:
-                    logger.error(f"删除分段文件失败: {seg_file}, 错误: {e}")
+                if send_success:
+                    try:
+                        os.remove(file_path)
+                        logger.trace(f"已删除分段文件: {seg_file}")
+                    except OSError as e:
+                        logger.error(f"删除分段文件失败: {seg_file}, 错误: {e}")
+                else:
+                    logger.warning(f"发送失败，保留分段文件以便重试: {seg_file}")
         return  # 处理完分段文件后返回，下次再处理普通文件
     
     # 处理普通文件
@@ -239,39 +242,50 @@ async def send_file(
                     file_name=file_name,
                     parts_count=len(split_files)
                 )
+                all_parts_sent = True
                 for idx, split_file_path in enumerate(split_files):
-                    await send_single_file(
+                    send_success = await send_single_file(
                         context,
                         chat_id,
                         split_file_path,
                         group_name=group_name,
                     )
+                    if send_success:
+                        try:
+                            await asyncio.sleep(1)  # 等待文件句柄释放
+                            os.remove(split_file_path)  # 发送后删除临时文件
+                            logger.trace(f"已删除切割文件: {split_file_path}")
+                        except OSError as e:
+                            logger.error(f"删除切割文件失败: {split_file_path}, 错误: {e}")
+                    else:
+                        all_parts_sent = False
+                        logger.warning(f"发送分片失败，保留文件以便重试: {split_file_path}")
+                if all_parts_sent:
                     try:
-                        await asyncio.sleep(1)  # 等待文件句柄释放
-                        os.remove(split_file_path)  # 发送后删除临时文件
-                        logger.trace(f"已删除切割文件: {split_file_path}")
+                        os.remove(file_path)  # 发送完成后删除原始文件
+                        logger.info(f"已删除原始大文件: {file_path}")
                     except OSError as e:
-                        logger.error(f"删除切割文件失败: {split_file_path}, 错误: {e}")
-                try:
-                    os.remove(file_path)  # 发送完成后删除原始文件
-                    logger.info(f"已删除原始大文件: {file_path}")
-                except OSError as e:
-                    logger.error(f"删除原始大文件失败: {file_path}, 错误: {e}")
+                        logger.error(f"删除原始大文件失败: {file_path}, 错误: {e}")
+                else:
+                    logger.warning(f"部分分片发送失败，保留原始文件: {file_path}")
             else:
                 logger.error(f"文件切割失败或超出重试次数，跳过: {file_name}")
         else:
-            await send_single_file(
+            send_success = await send_single_file(
                 context,
                 chat_id,
                 file_path,
                 group_name=group_name,
             )
-            try:
-                await asyncio.sleep(1)  # 等待文件句柄释放
-                os.remove(file_path)  # 发送后删除文件
-                logger.info(f"已删除文件: {file_path}")
-            except OSError as e:
-                logger.error(f"删除文件失败: {file_path}, 错误: {e}")
+            if send_success:
+                try:
+                    await asyncio.sleep(1)  # 等待文件句柄释放
+                    os.remove(file_path)  # 发送后删除文件
+                    logger.info(f"已删除文件: {file_path}")
+                except OSError as e:
+                    logger.error(f"删除文件失败: {file_path}, 错误: {e}")
+            else:
+                logger.warning(f"发送失败，保留文件以便重试: {file_path}")
         
         break  # 每次任务只处理一个原始文件（或其分片）
 
@@ -472,13 +486,16 @@ async def send_single_file(
     chat_id,
     file_path,
     group_name: Optional[str] = None,
-):
+) -> bool:
     """
     发送单个文件到指定的聊天
+    
+    Returns:
+        bool: 发送成功返回 True，失败返回 False
     """
     if not os.path.exists(file_path) or os.path.getsize(file_path) == 0:
         logger.error(f"文件不存在或为空，跳过发送: {file_path}")
-        return
+        return False
 
     file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
     file_name_for_meta = os.path.basename(file_path)
@@ -570,3 +587,5 @@ async def send_single_file(
             video_id=video_id,
             audio_title=title,
         )
+    
+    return send_succeeded

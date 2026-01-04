@@ -659,8 +659,9 @@ class LocalConfigProvider(BaseConfigProvider):
                         line = line.strip()
 
                         if line:
-
-                            self._download_archive.add(line)
+                            # 去除 youtube 前缀，只保存 video_id
+                            vid = line.replace('youtube ', '')
+                            self._download_archive.add(vid)
 
             except Exception as e:
 
@@ -694,7 +695,7 @@ class LocalConfigProvider(BaseConfigProvider):
 
             with open(archive_file, 'a', encoding='utf-8') as f:
 
-                f.write(f"{video_id}\n")
+                f.write(f"youtube {video_id}\n")
 
             
 
