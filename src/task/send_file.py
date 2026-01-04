@@ -503,6 +503,22 @@ async def send_single_file(
     # 从文件名中提取频道名、视频ID和标题
     channel_name, video_id, base_title = extract_video_info_from_filename(file_name_for_meta)
     
+    # 检查是否已经发送过（避免超时误报导致的重复发送）
+    try:
+        provider = get_config_provider()
+        if provider and video_id:
+            has_sent = getattr(provider, 'has_sent_record', None)
+            if callable(has_sent) and has_sent(video_id, str(chat_id)):
+                logger.info(f"视频已发送过，跳过并删除文件: {video_id}")
+                try:
+                    os.remove(file_path)
+                    logger.info(f"已删除重复文件: {file_path}")
+                except OSError as e:
+                    logger.warning(f"删除重复文件失败: {file_path}, 错误: {e}")
+                return True  # 返回True表示"处理完成"，不需要重试
+    except Exception as e:
+        logger.warning(f"检查发送记录时出错: {e}")
+    
     # 处理分段文件的标题显示
     base_name = os.path.splitext(file_name_for_meta)[0]
     if '_' in base_name:
