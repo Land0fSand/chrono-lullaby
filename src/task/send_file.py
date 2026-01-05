@@ -550,35 +550,59 @@ async def send_single_file(
                 read_timeout=300,  # 5分钟超时，避免大文件误报
                 write_timeout=300,
             )
-        send_succeeded = True  # 只有真正发送成功才设为 True
+        send_succeeded = True
         
     except TimedOut as te:
-        # 超时不再静默吞掉，而是记录日志
+        # 超时通常意味着实际发送成功了，记录详细日志但当作成功处理
+        # (避免重复发送，因为 Telegram 服务器可能已经收到了)
         log_with_context(
             logger, logging.WARNING,
-            "发送超时",
+            "发送超时（视为成功）",
             file_name=os.path.basename(file_path),
+            file_size_mb=round(file_size_mb, 2),
             chat_id=chat_id,
             group_name=group_label,
-            error=str(te)
+            video_id=video_id,
+            timeout_config="read=300s, write=300s",
+            error_type=type(te).__name__,
+            error_message=str(te),
+            note="超时不等于失败，Telegram可能已收到。将删除本地文件避免重复发送。"
         )
+        send_succeeded = True  # 超时也当作成功，避免重复发送
+        
     except TelegramError as te:
         log_with_context(
             logger, logging.ERROR,
             "发送文件时发生 Telegram 错误",
             file_name=os.path.basename(file_path),
-            error=str(te)
+            file_size_mb=round(file_size_mb, 2),
+            chat_id=chat_id,
+            group_name=group_label,
+            video_id=video_id,
+            error_type=type(te).__name__,
+            error_message=str(te),
+            note="文件保留，下次将重试发送"
         )
         # Do not remove the file if sending failed, so it can be retried
     except FileNotFoundError:
-        logger.error(f"文件在发送前找不到了，可能已被其他进程删除: {file_path}")
+        log_with_context(
+            logger, logging.ERROR,
+            "文件在发送前找不到了",
+            file_path=file_path,
+            video_id=video_id,
+            note="可能已被其他进程删除"
+        )
     except Exception as e:
         log_with_context(
             logger, logging.ERROR,
             "发送文件时发生意外错误",
             file_name=os.path.basename(file_path),
-            error=str(e),
-            error_type=type(e).__name__
+            file_size_mb=round(file_size_mb, 2),
+            chat_id=chat_id,
+            video_id=video_id,
+            error_type=type(e).__name__,
+            error_message=str(e),
+            note="文件保留，下次将重试发送"
         )
         # Do not remove the file if sending failed
     
