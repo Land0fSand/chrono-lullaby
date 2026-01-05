@@ -547,8 +547,8 @@ async def send_single_file(
                 title=title,
                 performer=performer,
                 duration=duration_seconds,
-                read_timeout=120,  # 增加超时时间
-                write_timeout=120,
+                read_timeout=300,  # 5分钟超时，避免大文件误报
+                write_timeout=300,
             )
         send_succeeded = True  # 只有真正发送成功才设为 True
         
