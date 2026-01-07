@@ -52,9 +52,38 @@ def sync_download_archive(local_provider: LocalConfigProvider, notion_provider: 
         else:
             failed += 1
     
-    print(f"  ✅ 成功同步 {synced} 条记录")
+    print(f"  ✅ 本地→Notion: 成功同步 {synced} 条记录")
     if failed > 0:
         print(f"  ⚠️ 失败 {failed} 条记录")
+
+
+def sync_download_archive_bidirectional(local_provider: LocalConfigProvider, notion_provider: NotionConfigProvider):
+    """双向同步下载记录（取并集）"""
+    print("📥 正在双向同步下载记录...")
+    
+    # 读取本地和 Notion 的记录
+    local_archive = local_provider._load_download_archive()
+    notion_archive = notion_provider._load_download_archive()
+    
+    print(f"  本地: {len(local_archive)} 条, Notion: {len(notion_archive)} 条")
+    
+    # 计算差集
+    local_only = local_archive - notion_archive  # 本地有 Notion 没有
+    notion_only = notion_archive - local_archive  # Notion 有本地没有
+    
+    # 本地 → Notion
+    synced_to_notion = 0
+    for video_id in local_only:
+        if notion_provider.add_download_record(video_id, "unknown", "completed"):
+            synced_to_notion += 1
+    
+    # Notion → 本地
+    synced_to_local = 0
+    for video_id in notion_only:
+        if local_provider.add_download_record(video_id, "unknown", "completed"):
+            synced_to_local += 1
+    
+    print(f"  ✅ 本地→Notion: {synced_to_notion} 条, Notion→本地: {synced_to_local} 条")
 
 
 def sync_sent_archive(local_provider: LocalConfigProvider, notion_provider: NotionConfigProvider):
@@ -98,11 +127,58 @@ def sync_sent_archive(local_provider: LocalConfigProvider, notion_provider: Noti
         total_failed += failed
         
         if synced > 0:
-            print(f"    ✅ 成功同步 {synced} 条")
+            print(f"    ✅ 本地→Notion: {synced} 条")
         if failed > 0:
             print(f"    ⚠️ 失败 {failed} 条")
     
-    print(f"  总计: ✅ {total_synced} 条成功, ⚠️ {total_failed} 条失败")
+    print(f"  总计: ✅ 本地→Notion {total_synced} 条成功, ⚠️ {total_failed} 条失败")
+
+
+def sync_sent_archive_bidirectional(local_provider: LocalConfigProvider, notion_provider: NotionConfigProvider):
+    """双向同步已发送记录（取并集）"""
+    print("📤 正在双向同步已发送记录...")
+    
+    channel_groups = local_provider.get_channel_groups()
+    
+    total_to_notion = 0
+    total_to_local = 0
+    
+    for group in channel_groups:
+        chat_id = group.get('telegram_chat_id')
+        if not chat_id:
+            continue
+        
+        # 读取本地和 Notion 的记录
+        local_sent = local_provider._load_sent_archive(chat_id)
+        notion_sent = notion_provider._load_sent_archive(chat_id)
+        
+        # 计算差集
+        local_only = local_sent - notion_sent
+        notion_only = notion_sent - local_sent
+        
+        if not local_only and not notion_only:
+            continue
+        
+        print(f"  频道 {chat_id}: 本地 {len(local_sent)} 条, Notion {len(notion_sent)} 条")
+        
+        # 本地 → Notion
+        synced_to_notion = 0
+        for video_id in local_only:
+            if notion_provider.add_sent_record(video_id, chat_id, "unknown", "unknown"):
+                synced_to_notion += 1
+        
+        # Notion → 本地
+        synced_to_local = 0
+        for video_id in notion_only:
+            if local_provider.add_sent_record(video_id, chat_id, "unknown", "unknown"):
+                synced_to_local += 1
+        
+        total_to_notion += synced_to_notion
+        total_to_local += synced_to_local
+        
+        print(f"    ✅ 本地→Notion: {synced_to_notion}, Notion→本地: {synced_to_local}")
+    
+    print(f"  总计: 本地→Notion {total_to_notion} 条, Notion→本地 {total_to_local} 条")
 
 
 def sync_config(local_provider: LocalConfigProvider, notion_provider: NotionConfigProvider):
@@ -301,6 +377,8 @@ def main():
     parser = argparse.ArgumentParser(description='同步本地数据到 Notion')
     parser.add_argument('--data', choices=['all', 'config', 'archive', 'logs'], 
                        default='all', help='要同步的数据类型')
+    parser.add_argument('--bidirectional', '-b', action='store_true',
+                       help='双向同步（本地和Notion取并集）')
     
     args = parser.parse_args()
     
@@ -357,9 +435,14 @@ def main():
     
     try:
         if data_type == 'all' or data_type == 'archive':
-            sync_download_archive(local_provider, notion_provider)
-            print()
-            sync_sent_archive(local_provider, notion_provider)
+            if args.bidirectional:
+                sync_download_archive_bidirectional(local_provider, notion_provider)
+                print()
+                sync_sent_archive_bidirectional(local_provider, notion_provider)
+            else:
+                sync_download_archive(local_provider, notion_provider)
+                print()
+                sync_sent_archive(local_provider, notion_provider)
             print()
         
         if data_type == 'all' or data_type == 'config':
