@@ -594,13 +594,13 @@ def check_cookies():
         return True
         
     if not os.path.exists(COOKIES_FILE):
-        logger.error("未找到cookies文件！")
+        logger.error(f"未找到cookies文件！预期路径: {COOKIES_FILE}")
         logger.info("请按以下步骤操作：")
         logger.info("1. 安装Chrome扩展：'Cookie-Editor'")
         logger.info("2. 访问 YouTube 并确保已登录")
         logger.info("3. 点击Cookie-Editor扩展图标")
         logger.info("4. 点击'Export'按钮，选择'Netscape HTTP Cookie File'格式")
-        logger.info("5. 将导出的内容保存到项目根目录下的 'youtube.cookies' 文件中")
+        logger.info(f"5. 将导出的内容保存到文件: {COOKIES_FILE}")
         logger.info("6. 完成后重新运行程序")
         return False
     return True
