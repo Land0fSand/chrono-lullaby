@@ -757,7 +757,16 @@ def dl_audio_latest(channel_name, audio_folder=None, group_name=None):
             log_with_context(logger, logging.INFO, "开始获取频道视频列表", yt_channel=channel_name, url=url)
             channel_info = list_ydl.extract_info(url, download=False)
             entries_count = len(channel_info.get('entries', [])) if channel_info else 0
-            log_with_context(logger, logging.INFO, "频道信息获取完成", yt_channel=channel_name, entries_count=entries_count)
+            
+            # 获取频道显示名（因为 extract_flat=True 时 entries 里可能没有）
+            channel_display_name = None
+            if channel_info:
+                channel_display_name = channel_info.get('channel') or channel_info.get('uploader') or channel_info.get('title')
+                # 如果获取到的是 "Videos" 后缀的标题，尝试清理
+                if channel_display_name and channel_display_name.endswith(' - Videos'):
+                    channel_display_name = channel_display_name.replace(' - Videos', '')
+            
+            log_with_context(logger, logging.INFO, "频道信息获取完成", yt_channel=channel_name, display_name=channel_display_name, entries_count=entries_count)
             
             
             if not channel_info or 'entries' not in channel_info:
@@ -859,7 +868,8 @@ def dl_audio_latest(channel_name, audio_folder=None, group_name=None):
                     continue
 
                 # 构建文件名：{频道名}.{video_id}.{title}.m4a
-                uploader = video_info.get('uploader') or video_info.get('channel') or channel_name or 'UnknownChannel'
+                # 优先使用顶级频道信息中的显示名，因为 extract_flat=True 时 entry 中的 uploader 可能是 handle
+                uploader = channel_display_name or video_info.get('uploader') or video_info.get('channel') or channel_name or 'UnknownChannel'
                 safe_uploader = sanitize_filename(uploader)
                 
                 fulltitle = video_info.get('fulltitle') or video_info.get('title') or 'UnknownTitle'
@@ -910,22 +920,32 @@ def dl_audio_latest(channel_name, audio_folder=None, group_name=None):
                 current_video_ydl_opts['outtmpl'] = temp_audio_path_without_ext + '.tmp'
 
                 # 先检查过滤器（避免被过滤的视频被误报为下载失败）
-                filter_result = combined_filter(video_info)
-                if filter_result:
-                    log_with_context(
-                        logger, TRACE_LEVEL,
-                        f"⏭️ 跳过 {video_id} ({filter_result})",
-                        yt_channel=channel_name
-                    )
-                    stats['filtered'] += 1
-                    stats['details'].append({
-                        'index': idx,
-                        'title': video_title,
-                        'id': video_id,
-                        'status': 'filtered',
-                        'reason': filter_result
-                    })
-                    continue
+                # 注意：extract_flat=True 时，video_info 可能缺少 timestamp/upload_date
+                # 如果缺少日期信息，跳过此处的手动过滤，让 yt-dlp 在 download 内部获取完整信息后通过 match_filter 过滤
+                has_date_info = video_info.get('timestamp') is not None or video_info.get('upload_date') is not None
+                
+                if has_date_info:
+                    filter_result = combined_filter(video_info)
+                    if filter_result:
+                        log_with_context(
+                            logger, TRACE_LEVEL,
+                            f"⏭️ 跳过 {video_id} ({filter_result})",
+                            yt_channel=channel_name
+                        )
+                        stats['filtered'] += 1
+                        stats['details'].append({
+                            'index': idx,
+                            'title': video_title,
+                            'id': video_id,
+                            'status': 'filtered',
+                            'reason': filter_result
+                        })
+                        continue
+                else:
+                    # 没有日期信息，无法在下载前过滤，交由 video_ydl.download 处理
+                    # 但我们需要注意，如果 video_ydl.download 过滤了视频，会抛出 DownloadError 还是静默？
+                    # 通常 match_filter 返回 string 会导致 "Video ... does not pass filter" 并抛出 DownloadError (或 warning)
+                    pass
 
                 try:
                     with yt_dlp.YoutubeDL(current_video_ydl_opts) as video_ydl:
@@ -1173,6 +1193,19 @@ def dl_audio_latest(channel_name, audio_folder=None, group_name=None):
                 )
                 return True  # 不算错误，返回成功
             
+            # 检查是否为被过滤器拦截的视频 (yt-dlp match_filter returned message)
+            if "does not pass filter" in error_str:
+                 log_with_context(
+                    logger, logging.INFO if has_date_info else logging.DEBUG, # 如果之前没能过滤，这里是第一次过滤，用DEBUG避免刷屏？不，还是INFO好知道发生了什么
+                    f"⏭️ 视频被过滤规则拦截",
+                    yt_channel=channel_name,
+                    video_id=video_id,
+                    reason=error_msg
+                )
+                 # 这种情况下我们应该增加 filtered 计数
+                 stats['filtered'] += 1
+                 return True
+
             # 检查是否为会员专属内容错误（频道视频都是会员内容时会在获取列表阶段就报错）
             if ("members-only" in error_str.lower() or 
                 ("member" in error_str.lower() and "join this channel" in error_str.lower())):
