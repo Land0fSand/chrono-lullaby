@@ -746,6 +746,7 @@ def dl_audio_latest(channel_name, audio_folder=None, group_name=None):
         "quiet": True,
         "playlistend": max_videos,
         "cookiefile": COOKIES_FILE,
+        "extract_flat": True,
     }
     list_opts = apply_js_runtime(list_opts)
     
@@ -753,7 +754,10 @@ def dl_audio_latest(channel_name, audio_folder=None, group_name=None):
         try:
             # YouTube频道结构变化：直接访问 /videos 页面获取视频列表
             url = f"{yt_base_url}{channel_name}/videos"
+            log_with_context(logger, logging.INFO, "开始获取频道视频列表", yt_channel=channel_name, url=url)
             channel_info = list_ydl.extract_info(url, download=False)
+            entries_count = len(channel_info.get('entries', [])) if channel_info else 0
+            log_with_context(logger, logging.INFO, "频道信息获取完成", yt_channel=channel_name, entries_count=entries_count)
             
             
             if not channel_info or 'entries' not in channel_info:
@@ -777,6 +781,16 @@ def dl_audio_latest(channel_name, audio_folder=None, group_name=None):
                         # 只获取 max_videos 个
                         if len(entries_to_download) >= max_videos:
                             break
+            
+            # 如果没有有效条目，记录警告
+            if not entries_to_download:
+                log_with_context(
+                    logger, logging.WARNING,
+                    "频道视频列表为空或全部无效",
+                    yt_channel=channel_name,
+                    raw_entries_count=len(list(raw_entries)) if raw_entries else 0
+                )
+                return True  # 不算错误，可能是新频道或视频都被删了
             
             # 记录找到的视频总数
             stats['total'] = len(entries_to_download)
@@ -1141,12 +1155,22 @@ def dl_audio_latest(channel_name, audio_folder=None, group_name=None):
             
             # 检查是否为直播预告（还未开始的直播）
             if "live event will begin in" in error_str.lower():
-                logger.info(f"频道 {channel_name} 包含直播预告视频，稍后自动下载")
+                log_with_context(
+                    logger, logging.INFO,
+                    "频道包含直播预告视频，稍后自动下载",
+                    yt_channel=channel_name,
+                    note="直播尚未开始"
+                )
                 return True  # 不算错误，返回成功
             
             # 检查是否为 YouTube Premiere（首映）视频
             if "premieres in" in error_str.lower() or "premiere" in error_str.lower():
-                logger.info(f"频道 {channel_name} 包含待首映视频，稍后自动下载")
+                log_with_context(
+                    logger, logging.INFO,
+                    "频道包含待首映视频，稍后自动下载",
+                    yt_channel=channel_name,
+                    note="首映尚未开始"
+                )
                 return True  # 不算错误，返回成功
             
             # 检查是否为会员专属内容错误（频道视频都是会员内容时会在获取列表阶段就报错）
@@ -1155,7 +1179,7 @@ def dl_audio_latest(channel_name, audio_folder=None, group_name=None):
                 safe_title = video_title or "未知标题"
                 safe_id = video_id or "unknown"
                 log_with_context(
-                    logger, TRACE_LEVEL,
+                    logger, logging.INFO,
                     f"⏭️ 频道当前视频《{safe_title}》为会员专属，跳过",
                     yt_channel=channel_name,
                     video_title=safe_title,
