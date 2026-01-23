@@ -137,14 +137,14 @@ $scriptPath = $MyInvocation.MyCommand.Path
 $scriptDir = Split-Path $scriptPath -Parent
 $projectRoot = Split-Path $scriptDir -Parent
 
-# 检查虚拟环境或 Poetry
+# 检查虚拟环境或 uv
 $venvPath = Join-Path $projectRoot ".venv\Scripts\python.exe"
 $useVenv = Test-Path $venvPath
 
-if (-not $useVenv -and -not (Get-Command poetry -ErrorAction SilentlyContinue)) {
-    Write-Host "错误: 未找到虚拟环境或 Poetry" -ForegroundColor Red
+if (-not $useVenv -and -not (Get-Command uv -ErrorAction SilentlyContinue)) {
+    Write-Host "错误: 未找到虚拟环境或 uv" -ForegroundColor Red
     Write-Host "请运行以下命令之一来设置环境:" -ForegroundColor Yellow
-    Write-Host "  1. 使用 Poetry: poetry install" -ForegroundColor Gray
+    Write-Host "  1. 使用 uv: uv sync" -ForegroundColor Gray
     Write-Host "  2. 手动创建虚拟环境并安装依赖 (参见 README)" -ForegroundColor Gray
     exit 1
 }
@@ -242,7 +242,7 @@ function Invoke-StartCommand {
             $downloaderProcess = Start-Process -FilePath $pythonExe -ArgumentList "yt_dlp_downloader.py" -WindowStyle Hidden -PassThru
         }
         else {
-            $downloaderProcess = Start-Process -FilePath "poetry" -ArgumentList "run", "python", "yt_dlp_downloader.py" -WindowStyle Hidden -PassThru
+            $downloaderProcess = Start-Process -FilePath "uv" -ArgumentList "run", "python", "yt_dlp_downloader.py" -WindowStyle Hidden -PassThru
         }
 
         Start-Sleep 2
@@ -254,7 +254,7 @@ function Invoke-StartCommand {
             $botProcess = Start-Process -FilePath $pythonExe -ArgumentList "telegram_bot.py" -WindowStyle Hidden -PassThru
         }
         else {
-            $botProcess = Start-Process -FilePath "poetry" -ArgumentList "run", "python", "telegram_bot.py" -WindowStyle Hidden -PassThru
+            $botProcess = Start-Process -FilePath "uv" -ArgumentList "run", "python", "telegram_bot.py" -WindowStyle Hidden -PassThru
         }
 
         # 创建进程信息文件（使用绝对路径）
@@ -517,9 +517,9 @@ function Invoke-StatusCommand {
         Write-Host "未找到进程信息文件，手动搜索相关进程..." -ForegroundColor Yellow
         Write-Host ""
 
-        # 搜索相关的Poetry和Python进程
+        # 搜索相关的 uv 和 Python 进程
         $allProcesses = @()
-        $allProcesses += Get-Process -Name "poetry*" -ErrorAction SilentlyContinue
+        $allProcesses += Get-Process -Name "uv*" -ErrorAction SilentlyContinue
         $allProcesses += Get-Process -Name "python*" -ErrorAction SilentlyContinue
         $foundProcesses = $false
 
@@ -547,7 +547,7 @@ function Invoke-StatusCommand {
         }
 
         if (-not $foundProcesses) {
-            Write-Host "未找到相关的 Poetry/Python 进程" -ForegroundColor Yellow
+            Write-Host "未找到相关的 uv/Python 进程" -ForegroundColor Yellow
             Write-Host "提示: 如果进程正在运行，可能需要管理员权限来查看详细信息" -ForegroundColor Gray
         }
     }
@@ -696,7 +696,7 @@ function Invoke-InitNotionCommand {
             & $pythonExe "commands\init_notion.py"
         }
         else {
-            poetry run python "commands\init_notion.py"
+            uv run python "commands\init_notion.py"
         }
         
         $exitCode = $LASTEXITCODE
@@ -728,7 +728,7 @@ function Invoke-UpgradeNotionSchemaCommand {
             & $pythonExe "commands\update_notion_schema.py"
         }
         else {
-            poetry run python "commands\update_notion_schema.py"
+            uv run python "commands\update_notion_schema.py"
         }
 
         $exitCode = $LASTEXITCODE
@@ -812,7 +812,7 @@ function Invoke-SyncToNotionCommand {
             & $pythonExe $syncArgs
         }
         else {
-            poetry run python $syncArgs
+            uv run python $syncArgs
         }
         
         $exitCode = $LASTEXITCODE
@@ -856,7 +856,7 @@ function Invoke-MigrateMultiselectCommand {
         Write-Host ""
         
         # 执行迁移脚本
-        & poetry run python "commands/migrate_youtube_channels_to_multiselect.py"
+        & uv run python "commands/migrate_youtube_channels_to_multiselect.py"
         
         $exitCode = $LASTEXITCODE
         
@@ -894,10 +894,10 @@ function Invoke-CleanNotionLogsCommand {
             $pythonArgs += $arg
         }
         
-        Write-Host "执行命令: poetry run python -m src.commands.clean_notion_logs $($pythonArgs -join ' ')" -ForegroundColor Gray
+        Write-Host "执行命令: uv run python -m src.commands.clean_notion_logs $($pythonArgs -join ' ')" -ForegroundColor Gray
         Write-Host ""
         
-        poetry run python -m src.commands.clean_notion_logs @pythonArgs
+        uv run python -m src.commands.clean_notion_logs @pythonArgs
         
         $exitCode = $LASTEXITCODE
         
@@ -921,7 +921,7 @@ function Invoke-CleanNotionLogsCommand {
 function Invoke-CleanupCommand {
     Write-Host "=== ChronoLullaby 超级强制清理 ===" -ForegroundColor Green
     Write-Host "🔥 超级模式：将强制终止所有相关进程" -ForegroundColor Red
-    Write-Host "⚠️ 此命令会终止所有Python/Poetry进程，可能影响其他项目" -ForegroundColor Yellow
+    Write-Host "⚠️ 此命令会终止所有Python/uv进程，可能影响其他项目" -ForegroundColor Yellow
     Write-Host ""
 
     $confirmation = Read-Host "确认要执行超级清理吗？(yes/no)"
@@ -932,13 +932,10 @@ function Invoke-CleanupCommand {
 
     $stopped = 0
 
-    # 超级模式：强制终止所有相关进程
-    Write-Host "🔍 查找所有Python和Poetry进程..." -ForegroundColor Cyan
-
-    # 查找所有poetry进程
-    $poetryProcesses = Get-Process -Name "poetry*" -ErrorAction SilentlyContinue
-    if ($poetryProcesses) {
-        foreach ($process in $poetryProcesses) {
+    # 查找所有 uv 进程
+    $uvProcesses = Get-Process -Name "uv*" -ErrorAction SilentlyContinue
+    if ($uvProcesses) {
+        foreach ($process in $uvProcesses) {
             try {
                 Stop-Process -Id $process.Id -Force
                 Write-Host "💀 强制终止: $($process.ProcessName) (PID: $($process.Id))" -ForegroundColor Red
@@ -967,7 +964,7 @@ function Invoke-CleanupCommand {
 
     # 查找所有cmd进程
     $cmdProcesses = Get-Process -Name "cmd*" -ErrorAction SilentlyContinue | Where-Object {
-        $_.CommandLine -and ($_.CommandLine -like "*python*" -or $_.CommandLine -like "*poetry*" -or $_.CommandLine -like "*chronolullaby*")
+        $_.CommandLine -and ($_.CommandLine -like "*python*" -or $_.CommandLine -like "*uv*" -or $_.CommandLine -like "*chronolullaby*")
     }
     if ($cmdProcesses) {
         foreach ($process in $cmdProcesses) {
@@ -1040,7 +1037,7 @@ function Invoke-CleanupCommand {
     Write-Host ""
     Write-Host "🔥 超级清理完成！" -ForegroundColor Green
     Write-Host "💀 强制终止了 $stopped 个进程" -ForegroundColor Red
-    Write-Host "⚠️ 所有Python/Poetry进程已被强制终止" -ForegroundColor Yellow
+    Write-Host "⚠️ 所有Python/uv进程已被强制终止" -ForegroundColor Yellow
     Write-Host "💡 现在可以安全删除任何日志文件" -ForegroundColor Cyan
 }
 
@@ -1052,8 +1049,8 @@ function Get-AllRelatedProcesses {
 
     $allProcesses = @()
 
-    # 查找poetry进程
-    $poetryProcesses = Get-Process -Name "poetry*" -ErrorAction SilentlyContinue | Where-Object {
+    # 查找 uv 进程
+    $uvProcesses = Get-Process -Name "uv*" -ErrorAction SilentlyContinue | Where-Object {
         if ($_.CommandLine) {
             $found = $false
             foreach ($keyword in $Keywords) {
@@ -1066,7 +1063,7 @@ function Get-AllRelatedProcesses {
         }
         return $false
     }
-    $allProcesses += $poetryProcesses
+    $allProcesses += $uvProcesses
 
     # 查找python进程
     $pythonProcesses = Get-Process -Name "python*" -ErrorAction SilentlyContinue | Where-Object {
