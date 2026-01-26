@@ -182,7 +182,7 @@ requires-dist = [
     { name = "beautifulsoup4", specifier = ">=4.12.3" },
     { name = "browser-cookie3", specifier = ">=0.19.1" },
     { name = "ffmpeg-python", specifier = ">=0.2.0" },
-    { name = "notion-client", specifier = ">=2.2.1" },
+    { name = "notion-client", specifier = ">=2.7.0" },
     { name = "pydub", specifier = ">=0.25.1" },
     { name = "python-dotenv", specifier = ">=1.0.1" },
     { name = "python-telegram-bot", extras = ["job-queue"], specifier = ">=22.0" },

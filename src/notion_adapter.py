@@ -55,6 +55,7 @@ class NotionAdapter:
         
         self.client = Client(auth=api_key)
         self.max_retries = max_retries
+        self._database_datasource_map: Dict[str, str] = {}  # Cache for database_id -> data_source_id
     
     def _retry_api_call(self, func, *args, **kwargs):
         """
@@ -172,7 +173,7 @@ class NotionAdapter:
     def query_database(self, database_id: str, filter_obj: Optional[Dict] = None,
                       sorts: Optional[List[Dict]] = None, page_size: int = 100) -> List[Dict]:
         """
-        查询数据库
+        查询数据库 (v2.7+ 使用 Data Sources API)
         
         Args:
             database_id: 数据库 ID
@@ -183,13 +184,41 @@ class NotionAdapter:
         Returns:
             查询结果列表
         """
+        # 1. 解析 Data Source ID
+        data_source_id = self._database_datasource_map.get(database_id)
+        
+        if not data_source_id:
+            try:
+                # 获取数据库元数据以查找 Data Source ID
+                sys_logger = _get_sys_logger()
+                db_info = self._retry_api_call(self.client.databases.retrieve, database_id=database_id)
+                
+                # 从关联的数据源中获取第一个 ID
+                data_sources = db_info.get("data_sources", [])
+                if not data_sources:
+                    error_msg = f"Database {database_id} has no data sources linked. Cannot query."
+                    print(f"❌ {error_msg}")
+                    if sys_logger:
+                         from logger import log_with_context
+                         import logging
+                         log_with_context(sys_logger, logging.ERROR, "Notion API Error", error=error_msg)
+                    return []
+                
+                data_source_id = data_sources[0]["id"]
+                self._database_datasource_map[database_id] = data_source_id
+                
+            except Exception as e:
+                print(f"Error resolving data source for database {database_id}: {e}")
+                raise
+
+        # 2. 执行查询
         results = []
         has_more = True
         start_cursor = None
         
         while has_more:
             query_params = {
-                "database_id": database_id,
+                "data_source_id": data_source_id,
                 "page_size": page_size
             }
             
@@ -201,10 +230,11 @@ class NotionAdapter:
                 query_params["start_cursor"] = start_cursor
             
             response = self._retry_api_call(
-                self.client.databases.query,
+                self.client.data_sources.query,
                 **query_params
             )
             
+            # 结果可能在 results 或其他字段? 通常是 results
             results.extend(response.get("results", []))
             has_more = response.get("has_more", False)
             start_cursor = response.get("next_cursor")
