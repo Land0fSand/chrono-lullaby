@@ -204,8 +204,10 @@ async def send_file(
                 )
                 if send_success:
                     try:
-                        os.remove(file_path)
-                        logger.trace(f"已删除分段文件: {seg_file}")
+                        # 检查文件是否存在（可能已被 send_single_file 内部删除）
+                        if os.path.exists(file_path):
+                            os.remove(file_path)
+                            logger.trace(f"已删除分段文件: {seg_file}")
                     except OSError as e:
                         logger.error(f"删除分段文件失败: {seg_file}, 错误: {e}")
                 else:
@@ -253,8 +255,10 @@ async def send_file(
                     if send_success:
                         try:
                             await asyncio.sleep(1)  # 等待文件句柄释放
-                            os.remove(split_file_path)  # 发送后删除临时文件
-                            logger.trace(f"已删除切割文件: {split_file_path}")
+                            # 检查文件是否存在（可能已被 send_single_file 内部删除）
+                            if os.path.exists(split_file_path):
+                                os.remove(split_file_path)  # 发送后删除临时文件
+                                logger.trace(f"已删除切割文件: {split_file_path}")
                         except OSError as e:
                             logger.error(f"删除切割文件失败: {split_file_path}, 错误: {e}")
                     else:
@@ -280,8 +284,10 @@ async def send_file(
             if send_success:
                 try:
                     await asyncio.sleep(1)  # 等待文件句柄释放
-                    os.remove(file_path)  # 发送后删除文件
-                    logger.info(f"已删除文件: {file_path}")
+                    # 检查文件是否存在（可能已被 send_single_file 内部删除）
+                    if os.path.exists(file_path):
+                        os.remove(file_path)  # 发送后删除文件
+                        logger.info(f"已删除文件: {file_path}")
                 except OSError as e:
                     logger.error(f"删除文件失败: {file_path}, 错误: {e}")
             else:

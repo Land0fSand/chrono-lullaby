@@ -947,6 +947,30 @@ def dl_audio_latest(channel_name, audio_folder=None, group_name=None):
                     # 通常 match_filter 返回 string 会导致 "Video ... does not pass filter" 并抛出 DownloadError (或 warning)
                     pass
 
+                # 用于追踪 yt-dlp 下载过程中是否遇到会员/权限问题
+                download_context = {'member_blocked': False, 'error_reason': None}
+                
+                # 包装 yt-dlp logger 以捕获会员相关错误
+                class ContextAwareYTDLLogger(TimestampedYTDLLogger):
+                    def error(self, msg):
+                        cleaned = self._clean_message(msg)
+                        if not cleaned:
+                            return
+                        lower = cleaned.lower()
+                        # 检测会员/订阅相关错误
+                        if any(kw in lower for kw in ['members-only', 'member', 'join this channel', 'subscriber', 'premium']):
+                            download_context['member_blocked'] = True
+                            download_context['error_reason'] = '会员专属内容'
+                            # 降级为 trace，不刷屏
+                            self._logger.trace(f"🔒 {cleaned}")
+                        elif 'requested format is not available' in lower and download_context.get('member_blocked'):
+                            # 格式不可用可能是会员限制的结果，静默处理
+                            self._logger.trace(cleaned)
+                        else:
+                            self._logger.error(f'❌ yt-dlp: {cleaned}')
+                
+                current_video_ydl_opts['logger'] = ContextAwareYTDLLogger()
+                
                 try:
                     with yt_dlp.YoutubeDL(current_video_ydl_opts) as video_ydl:
                         video_ydl.download([video_url]) 
@@ -1009,29 +1033,48 @@ def dl_audio_latest(channel_name, audio_folder=None, group_name=None):
                                 'reason': '文件重命名失败'
                             })
                     else:
-                        log_with_context(
-                            logger, logging.ERROR,
-                            f"❌ 转换失败 {video_id} (文件未找到)",
-                            yt_channel=channel_name
-                        )
-                        original_downloaded_file_actual_ext = None
-                        for ext_try in ['.webm', '.mp4', '.mkv', '.flv', '.avi', '.mov', '.opus', '.ogg', '.mp3']:
-                            potential_orig_file = temp_audio_path_without_ext + ext_try + '.tmp'
-                            if os.path.exists(potential_orig_file):
-                                original_downloaded_file_actual_ext = ext_try
-                                logger.warning(f"找到原始下载文件: {potential_orig_file}，但未转换为 {expected_audio_ext}")
-                                break
-                        if not original_downloaded_file_actual_ext:
-                            logger.error(f"🧩 原始下载文件也未找到 (尝试的模板: {temp_audio_path_without_ext}.*.tmp)")
+                        # 文件未找到：检查是否是会员内容导致的静默跳过
+                        if download_context.get('member_blocked'):
+                            # 会员内容被静默跳过，这是预期行为，用 DEBUG 级别记录
+                            log_with_context(
+                                logger, TRACE_LEVEL,
+                                f"🔒 跳过会员视频 {video_id}",
+                                yt_channel=channel_name,
+                                reason=download_context.get('error_reason', '会员专属内容')
+                            )
+                            stats['member_only'] += 1
+                            stats['details'].append({
+                                'index': idx,
+                                'title': video_title,
+                                'id': video_id,
+                                'status': 'member_only',
+                                'reason': download_context.get('error_reason', '会员专属内容')
+                            })
+                        else:
+                            # 真正的错误：文件未找到且不是会员问题
+                            log_with_context(
+                                logger, logging.ERROR,
+                                f"❌ 转换失败 {video_id} (文件未找到)",
+                                yt_channel=channel_name
+                            )
+                            original_downloaded_file_actual_ext = None
+                            for ext_try in ['.webm', '.mp4', '.mkv', '.flv', '.avi', '.mov', '.opus', '.ogg', '.mp3']:
+                                potential_orig_file = temp_audio_path_without_ext + ext_try + '.tmp'
+                                if os.path.exists(potential_orig_file):
+                                    original_downloaded_file_actual_ext = ext_try
+                                    logger.warning(f"找到原始下载文件: {potential_orig_file}，但未转换为 {expected_audio_ext}")
+                                    break
+                            if not original_downloaded_file_actual_ext:
+                                logger.trace(f"原始下载文件也未找到 (尝试的模板: {temp_audio_path_without_ext}.*.tmp)")
 
-                        stats['error'] += 1
-                        stats['details'].append({
-                            'index': idx,
-                            'title': video_title,
-                            'id': video_id,
-                            'status': 'error',
-                            'reason': '转换失败或文件未找到'
-                        })
+                            stats['error'] += 1
+                            stats['details'].append({
+                                'index': idx,
+                                'title': video_title,
+                                'id': video_id,
+                                'status': 'error',
+                                'reason': '转换失败或文件未找到'
+                            })
 
                 except yt_dlp.utils.DownloadError as de:
                     error_str = str(de)

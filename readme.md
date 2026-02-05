@@ -11,11 +11,8 @@
 ### 1. 安装依赖
 
 ```powershell
-# 使用 Poetry（推荐）
-poetry install
-
-# 或使用 pip
-pip install -r requirements.txt
+# 使用 uv 安装依赖
+uv sync
 ```
 
 ### 2. 配置
@@ -157,7 +154,7 @@ yt-dlp --cookies-from-browser chrome --cookies config/youtube.cookies https://ww
 
 ## 技术栈
 
-- Python 3.9+ / Poetry
+- Python 3.10+ / uv
 - [yt-dlp](https://github.com/yt-dlp/yt-dlp) - YouTube 下载
 - [python-telegram-bot](https://github.com/python-telegram-bot/python-telegram-bot) - Telegram Bot 框架
 - ffmpeg - 音频处理

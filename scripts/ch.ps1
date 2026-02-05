@@ -9,7 +9,8 @@
 
 param(
     [string]$Command,
-    [string]$Mode = "",  # 配置模式：local 或 notion
+    [Alias("m")]
+    [string]$Mode = "",  # 配置模式：local 或 notion（支持 --mode 或 -m）
     [string[]]$Arguments = @()
 )
 
@@ -48,9 +49,13 @@ function Show-Help {
     Write-Host "  --follow, -f             实时跟踪日志" -ForegroundColor Gray
     Write-Host "  --list, -l               列出所有日志文件" -ForegroundColor Gray
     Write-Host ""
+    Write-Host "启动选项:" -ForegroundColor Cyan
+    Write-Host "  --mode, -m <模式>        指定配置模式 (local 或 notion)，优先于配置文件" -ForegroundColor Gray
+    Write-Host ""
     Write-Host "示例:" -ForegroundColor Yellow
-    Write-Host "  ch start                 # 启动服务" -ForegroundColor Gray
-    Write-Host "  ch start --mode notion   # 使用 Notion 模式启动" -ForegroundColor Gray
+    Write-Host "  ch start                 # 启动服务（使用配置文件中的 mode）" -ForegroundColor Gray
+    Write-Host "  ch start --mode notion   # 使用 Notion 模式启动（覆盖配置文件）" -ForegroundColor Gray
+    Write-Host "  ch start -m notion       # 同上，使用短参数" -ForegroundColor Gray
     Write-Host "  ch stop                  # 停止服务" -ForegroundColor Gray
     Write-Host "  ch restart               # 重启服务" -ForegroundColor Gray
     Write-Host "  ch status                # 查看状态" -ForegroundColor Gray
@@ -168,10 +173,13 @@ if (-not $Command) {
 function Invoke-StartCommand {
     Write-Host "=== ChronoLullaby 服务启动 ===" -ForegroundColor Green
     
-    # 设置配置模式环境变量
+    # 设置配置模式环境变量（命令行参数优先于配置文件）
     if ($Mode) {
         $env:CONFIG_MODE = $Mode
-        Write-Host "配置模式: $Mode" -ForegroundColor Cyan
+        Write-Host "配置模式: $Mode (命令行指定，覆盖配置文件)" -ForegroundColor Cyan
+    }
+    else {
+        Write-Host "配置模式: 使用配置文件中的 mode 设置" -ForegroundColor Gray
     }
 
     # 检查是否已有实例在运行
