@@ -947,11 +947,34 @@ def dl_audio_latest(channel_name, audio_folder=None, group_name=None):
                     # 通常 match_filter 返回 string 会导致 "Video ... does not pass filter" 并抛出 DownloadError (或 warning)
                     pass
 
-                # 用于追踪 yt-dlp 下载过程中是否遇到会员/权限问题
-                download_context = {'member_blocked': False, 'error_reason': None}
+                # 用于追踪 yt-dlp 下载过程中是否遇到会员/权限问题或被过滤
+                download_context = {
+                    'member_blocked': False,
+                    'error_reason': None,
+                    'filtered': False,
+                    'filter_reason': None
+                }
                 
-                # 包装 yt-dlp logger 以捕获会员相关错误
+                # 包装 yt-dlp logger 以捕获会员相关错误和过滤消息
                 class ContextAwareYTDLLogger(TimestampedYTDLLogger):
+                    def warning(self, msg):
+                        cleaned = self._clean_message(msg)
+                        if not cleaned:
+                            return
+                        # 检测 match_filter 过滤消息
+                        # yt-dlp 格式: "[download] Video ... does not pass filter: <reason>"
+                        if 'does not pass filter' in cleaned.lower():
+                            download_context['filtered'] = True
+                            # 提取过滤原因
+                            if ':' in cleaned:
+                                download_context['filter_reason'] = cleaned.split(':', 1)[-1].strip()
+                            else:
+                                download_context['filter_reason'] = '被日期过滤器拦截'
+                            # 降级为 trace，不刷屏（这是预期行为）
+                            self._logger.trace(f"⏭️ {cleaned}")
+                        else:
+                            self._logger.warning(f'⚠️ yt-dlp: {cleaned}')
+                    
                     def error(self, msg):
                         cleaned = self._clean_message(msg)
                         if not cleaned:
@@ -1033,8 +1056,25 @@ def dl_audio_latest(channel_name, audio_folder=None, group_name=None):
                                 'reason': '文件重命名失败'
                             })
                     else:
-                        # 文件未找到：检查是否是会员内容导致的静默跳过
-                        if download_context.get('member_blocked'):
+                        # 文件未找到：检查是否是被过滤或会员内容导致的静默跳过
+                        if download_context.get('filtered'):
+                            # 视频被 match_filter 过滤（如超出日期范围），这是预期行为
+                            filter_reason = download_context.get('filter_reason', '被过滤器拦截')
+                            log_with_context(
+                                logger, TRACE_LEVEL,
+                                f"⏭️ 跳过已过滤视频 {video_id}",
+                                yt_channel=channel_name,
+                                reason=filter_reason
+                            )
+                            stats['filtered'] += 1
+                            stats['details'].append({
+                                'index': idx,
+                                'title': video_title,
+                                'id': video_id,
+                                'status': 'filtered',
+                                'reason': filter_reason
+                            })
+                        elif download_context.get('member_blocked'):
                             # 会员内容被静默跳过，这是预期行为，用 DEBUG 级别记录
                             log_with_context(
                                 logger, TRACE_LEVEL,
@@ -1051,7 +1091,7 @@ def dl_audio_latest(channel_name, audio_folder=None, group_name=None):
                                 'reason': download_context.get('error_reason', '会员专属内容')
                             })
                         else:
-                            # 真正的错误：文件未找到且不是会员问题
+                            # 真正的错误：文件未找到且不是会员问题也不是被过滤
                             log_with_context(
                                 logger, logging.ERROR,
                                 f"❌ 转换失败 {video_id} (文件未找到)",
