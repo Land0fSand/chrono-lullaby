@@ -50,6 +50,22 @@ log:
 debug:
   enabled: true
 
+# 下载器本地默认配置
+# 说明：这些值作为默认值，如果 Notion GlobalSettings 页面中配置了同名字段，会被覆盖
+telegram:
+  bot_token: "YOUR_TELEGRAM_BOT_TOKEN"  # Telegram Bot Token
+  send_interval: 180                    # 发送间隔（秒）
+
+downloader:
+  download_interval: 10800              # 实时频道下载间隔（秒），默认 3 小时
+  filter_days: 3                        # 只下载最近 N 天的视频
+  max_videos_per_channel: 6             # 每个频道最多检查的视频数
+  video_delay_min: 120                  # 同频道内视频间最小延迟（秒）
+  video_delay_max: 240                  # 同频道内视频间最大延迟（秒）
+  channel_delay_min: 180                # 频道间最小延迟（秒）
+  channel_delay_max: 480                # 频道间最大延迟（秒）
+  config_check_interval: 3600           # 配置热更新检测间隔（秒），默认 1 小时
+
 # 额外说明：
 # - 若想继续使用本地模式，请参考 config/config.local.example.yaml
 # - 本地模式需要在 YAML 中维护 telegram/downloader/频道组等完整信息

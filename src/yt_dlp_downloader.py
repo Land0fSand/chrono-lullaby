@@ -13,7 +13,7 @@ if sys.stderr.encoding != 'utf-8':
 from dotenv import load_dotenv
 from task.dl_audio import dl_audio_latest, dl_audio_story
 from util import refresh_channels_from_file, get_channel_groups_with_details
-from config import ENV_FILE, get_download_interval, get_channel_delay_min, get_channel_delay_max
+from config import ENV_FILE, get_download_interval, get_channel_delay_min, get_channel_delay_max, get_config_check_interval
 from logger import get_logger, log_with_context, TRACE_LEVEL
 import logging
 
@@ -311,6 +311,10 @@ def main():
             if not wait_candidates:
                 wait_candidates.append(60)
 
+            # 添加配置检查间隔作为等待时间上限，确保能及时发现新增频道或配置变更
+            config_check_interval = get_config_check_interval()
+            wait_candidates.append(config_check_interval)
+
             wait_time = max(1, min(wait_candidates))
             wait_context = {
                 "wait_seconds": wait_time,
@@ -321,6 +325,8 @@ def main():
             if story_due_name is not None and story_due_min is not None:
                 wait_context["next_story"] = story_due_name
                 wait_context["next_story_seconds"] = round(story_due_min, 2)
+            if wait_time == config_check_interval:
+                wait_context["reason"] = "config_check"
 
             log_with_context(
                 logger,

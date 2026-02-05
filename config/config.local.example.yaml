@@ -26,15 +26,16 @@ telegram:
   send_interval: 180
 
 downloader:
-  download_interval: 0
-  video_delay_min: 120
-  video_delay_max: 240
-  channel_delay_min: 20
-  channel_delay_max: 40
+  download_interval: 0                  # 实时频道下载间隔（秒），0 表示不自动循环
+  filter_days: 3                        # 只下载最近 N 天的视频
+  max_videos_per_channel: 6             # 每个频道最多检查的视频数
+  video_delay_min: 120                  # 同频道内视频间最小延迟（秒）
+  video_delay_max: 240                  # 同频道内视频间最大延迟（秒）
+  channel_delay_min: 20                 # 频道间最小延迟（秒）
+  channel_delay_max: 40                 # 频道间最大延迟（秒）
+  config_check_interval: 3600           # 配置热更新检测间隔（秒），默认 1 小时
   cookies_file: "config/youtube.cookies"
   download_archive: "data/download_archive.txt"
-  filter_days: 3
-  max_videos_per_channel: 6
 
 channel_groups:
   - name: "示例频道组"

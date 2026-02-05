@@ -349,6 +349,11 @@ def get_channel_delay_max() -> int:
     provider = get_config_provider()
     return provider.get_channel_delay_max()
 
+def get_config_check_interval() -> int:
+    """获取配置检查间隔（秒），用于热更新检测"""
+    provider = get_config_provider()
+    return provider.get_config_check_interval()
+
 def get_video_delay_min() -> int:
     """获取视频间最小延迟（秒）"""
     provider = get_config_provider()

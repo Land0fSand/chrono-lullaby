@@ -178,6 +178,16 @@ class BaseConfigProvider(ABC):
 
     @abstractmethod
 
+    def get_config_check_interval(self) -> int:
+
+        """获取配置检查间隔（秒），用于热更新检测"""
+
+        pass
+
+    
+
+    @abstractmethod
+
     def get_cookies_content(self) -> Optional[str]:
 
         """获取 Cookies 文件内容"""
@@ -594,6 +604,14 @@ class LocalConfigProvider(BaseConfigProvider):
 
     
 
+    def get_config_check_interval(self) -> int:
+
+        """获取配置检查间隔（秒），用于热更新检测，默认1小时"""
+
+        return self._get_config_value('downloader.config_check_interval', 3600)
+
+    
+
     def get_cookies_content(self) -> Optional[str]:
 
         """获取 Cookies 文件内容"""
@@ -987,13 +1005,17 @@ class NotionConfigProvider(BaseConfigProvider):
 
         """
 
-        从 Notion 加载全局设置
+        加载全局设置（字段级别合并）
 
         
 
-        优先从 Notion GlobalSettings 页面读取最新配置，
+        1. 先从本地 config.yaml 加载默认值
 
-        如果不存在或解析失败，则回退到本地 config.yaml
+        2. 再用 Notion GlobalSettings 页面的配置覆盖（如果有）
+
+        
+
+        这样本地 yaml 作为默认值/补充，Notion 配置优先级更高
 
         """
 
@@ -1003,15 +1025,23 @@ class NotionConfigProvider(BaseConfigProvider):
 
         
 
-        settings = self._load_global_settings_from_notion()
+        # 先从 yaml 加载默认值
 
-        if settings is None:
-
-            settings = self._load_global_settings_from_yaml()
+        settings = self._load_global_settings_from_yaml() or {}
 
         
 
-        self._global_settings_cache = settings or {}
+        # 再用 Notion 的值覆盖（字段级别合并）
+
+        notion_settings = self._load_global_settings_from_notion()
+
+        if notion_settings:
+
+            settings.update(notion_settings)
+
+        
+
+        self._global_settings_cache = settings
 
         return self._global_settings_cache
 
@@ -1101,7 +1131,9 @@ class NotionConfigProvider(BaseConfigProvider):
 
                     'download_interval', 'filter_days', 'max_videos_per_channel',
 
-                    'video_delay_min', 'video_delay_max', 'channel_delay_min', 'channel_delay_max'
+                    'video_delay_min', 'video_delay_max', 'channel_delay_min', 'channel_delay_max',
+
+                    'config_check_interval'
 
                 ]:
 
@@ -1161,7 +1193,9 @@ class NotionConfigProvider(BaseConfigProvider):
 
                 'download_interval', 'filter_days', 'max_videos_per_channel',
 
-                'video_delay_min', 'video_delay_max', 'channel_delay_min', 'channel_delay_max'
+                'video_delay_min', 'video_delay_max', 'channel_delay_min', 'channel_delay_max',
+
+                'config_check_interval'
 
             ]:
 
@@ -1338,6 +1372,16 @@ class NotionConfigProvider(BaseConfigProvider):
         return settings.get('channel_delay_max', 0)
 
     
+
+    def get_config_check_interval(self) -> int:
+
+        """获取配置检查间隔（秒），用于热更新检测，默认1小时"""
+
+        settings = self._load_global_settings()
+
+        return settings.get('config_check_interval', 3600)
+
+
 
     def get_cookies_content(self) -> Optional[str]:
 
