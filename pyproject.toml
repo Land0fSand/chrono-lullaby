@@ -10,7 +10,7 @@ authors = [
 dependencies = [
     "requests>=2.31.0",
     "beautifulsoup4>=4.12.3",
-    "yt-dlp>=2025.10.22",
+    "yt-dlp>=2026.1.1",
     "ffmpeg-python>=0.2.0",
     "pydub>=0.25.1",
     "python-dotenv>=1.0.1",
@@ -18,7 +18,7 @@ dependencies = [
     "browser-cookie3>=0.19.1",
     "PyYAML>=6.0",
     "notion-client>=2.7.0",
-    "yt-dlp-ejs>=0.3.2",
+    "yt-dlp-ejs>=0.4.0",
 ]
 
 [build-system]
@@ -31,4 +31,5 @@ packages = ["src"]
 [dependency-groups]
 dev = [
     "uv>=0.9.26",
+    "pyinstaller>=6.0",
 ]

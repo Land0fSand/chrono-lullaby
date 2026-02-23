@@ -204,7 +204,16 @@ class LoggerManager:
     
     def __init__(self):
         if not self._initialized:
-            self.log_dir = Path(__file__).parent.parent / "logs"
+            # PyInstaller 打包后 __file__ 指向临时解压目录，需要用 config 中的 PROJECT_ROOT
+            if getattr(sys, 'frozen', False):
+                # 从 config 模块获取正确的项目根目录
+                try:
+                    from config import PROJECT_ROOT
+                    self.log_dir = Path(PROJECT_ROOT) / "logs"
+                except ImportError:
+                    self.log_dir = Path(sys.executable).parent.parent / "logs"
+            else:
+                self.log_dir = Path(__file__).parent.parent / "logs"
             self.log_dir.mkdir(exist_ok=True)
             self.single_file_mode = self._load_single_file_flag()
             self.rotation_config = self._load_rotation_config()

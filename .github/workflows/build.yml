@@ -1,0 +1,100 @@
+name: Build Executables
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            artifact_name: chronolullaby-windows-x64
+            archive_ext: zip
+          - os: macos-latest
+            artifact_name: chronolullaby-macos-arm64
+            archive_ext: tar.gz
+          - os: ubuntu-latest
+            artifact_name: chronolullaby-linux-x64
+            archive_ext: tar.gz
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: 'latest'
+
+      - name: Install dependencies
+        run: uv sync --all-groups
+
+      - name: Build executables
+        run: |
+          uv run pyinstaller --distpath dist --workpath build/tmp --noconfirm build/chronolullaby.spec
+
+      - name: List build artifacts
+        shell: bash
+        run: |
+          echo "=== Build artifacts ==="
+          ls -lh dist/
+
+      - name: Package artifacts (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $archiveName = "${{ matrix.artifact_name }}-${tag}.zip"
+          Compress-Archive -Path dist\* -DestinationPath $archiveName
+          echo "ARCHIVE_NAME=$archiveName" >> $env:GITHUB_ENV
+
+      - name: Package artifacts (macOS/Linux)
+        if: matrix.os != 'windows-latest'
+        shell: bash
+        run: |
+          tag="${{ github.ref_name }}"
+          archive_name="${{ matrix.artifact_name }}-${tag}.tar.gz"
+          tar -czf "$archive_name" -C dist .
+          echo "ARCHIVE_NAME=$archive_name" >> "$GITHUB_ENV"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ env.ARCHIVE_NAME }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: List downloaded artifacts
+        run: find artifacts -type f | head -20
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ChronoLullaby ${{ github.ref_name }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          files: |
+            artifacts/**/*

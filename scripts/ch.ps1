@@ -157,9 +157,11 @@ if (-not $useVenv -and -not (Get-Command uv -ErrorAction SilentlyContinue)) {
 # 切换到项目根目录
 Set-Location $projectRoot
 
-# 检查是否在正确的项目目录（检查标志性文件）
-if (-not (Test-Path "src/yt_dlp_downloader.py") -or -not (Test-Path "src/telegram_bot.py")) {
-    Write-Host "错误: 未找到项目文件，请确保脚本在正确的项目目录中" -ForegroundColor Red
+# 检查是否在正确的项目目录（检查标志性文件：源码或编译产物）
+$hasSrc = (Test-Path "src/yt_dlp_downloader.py") -and (Test-Path "src/telegram_bot.py")
+$hasExe = (Test-Path "dist/yt_dlp_downloader.exe") -and (Test-Path "dist/telegram_bot.exe")
+if (-not $hasSrc -and -not $hasExe) {
+    Write-Host "错误: 未找到项目文件（源码或编译产物），请确保脚本在正确的项目目录中" -ForegroundColor Red
     Write-Host "当前目录: $(Get-Location)" -ForegroundColor Red
     exit 1
 }
@@ -231,8 +233,16 @@ function Invoke-StartCommand {
         }
     }
 
-    # 进入源代码目录
-    Push-Location src
+    # 检测是否有编译好的 exe 文件
+    $downloaderExe = Join-Path $projectRoot "dist\yt_dlp_downloader.exe"
+    $botExe = Join-Path $projectRoot "dist\telegram_bot.exe"
+    $useExe = (Test-Path $downloaderExe) -and (Test-Path $botExe)
+
+    # exe 模式：exe 通过 sys.executable 定位项目根（dist/ 的父目录），无需进入 src/
+    # Python 模式：需要进入 src/ 目录以便正确导入模块
+    if (-not $useExe) {
+        Push-Location src
+    }
 
     try {
         # 创建日志目录（使用绝对路径）
@@ -241,11 +251,21 @@ function Invoke-StartCommand {
             New-Item -ItemType Directory -Path $logDir -Force | Out-Null
         }
 
+        if ($useExe) {
+            Write-Host "检测到编译版本，使用 exe 启动" -ForegroundColor Green
+        }
+        else {
+            Write-Host "未检测到编译版本，使用 Python 启动" -ForegroundColor Gray
+        }
+
         Write-Host "后台启动 YouTube 下载器..." -ForegroundColor Cyan
         Write-Host "日志目录: $logDir" -ForegroundColor Gray
         Write-Host "日志文件由程序自动管理 (logs/downloader.log, logs/bot.log 等)" -ForegroundColor Gray
         
-        if ($useVenv) {
+        if ($useExe) {
+            $downloaderProcess = Start-Process -FilePath $downloaderExe -WorkingDirectory $projectRoot -WindowStyle Hidden -PassThru
+        }
+        elseif ($useVenv) {
             $pythonExe = Join-Path $projectRoot ".venv\Scripts\python.exe"
             $downloaderProcess = Start-Process -FilePath $pythonExe -ArgumentList "yt_dlp_downloader.py" -WindowStyle Hidden -PassThru
         }
@@ -257,7 +277,10 @@ function Invoke-StartCommand {
 
         Write-Host "后台启动 Telegram 机器人..." -ForegroundColor Cyan
         
-        if ($useVenv) {
+        if ($useExe) {
+            $botProcess = Start-Process -FilePath $botExe -WorkingDirectory $projectRoot -WindowStyle Hidden -PassThru
+        }
+        elseif ($useVenv) {
             $pythonExe = Join-Path $projectRoot ".venv\Scripts\python.exe"
             $botProcess = Start-Process -FilePath $pythonExe -ArgumentList "telegram_bot.py" -WindowStyle Hidden -PassThru
         }
@@ -273,12 +296,14 @@ function Invoke-StartCommand {
             "start_time"     = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
             "project_root"   = $projectRoot
             "log_dir"        = $logDir
+            "launch_mode"    = if ($useExe) { "exe" } else { "python" }
         }
 
         $processInfo | ConvertTo-Json | Out-File -FilePath $processInfoPath -Encoding UTF8
 
         Write-Host ""
         Write-Host "=== 服务启动完成 ===" -ForegroundColor Green
+        Write-Host "启动模式: $(if ($useExe) { 'exe (编译版)' } else { 'python (解释器)' })" -ForegroundColor White
         Write-Host "YouTube 下载器 PID: $($downloaderProcess.Id)" -ForegroundColor White
         Write-Host "Telegram 机器人 PID: $($botProcess.Id)" -ForegroundColor White
         Write-Host "进程信息已保存到: $processInfoPath" -ForegroundColor White
@@ -290,7 +315,9 @@ function Invoke-StartCommand {
         Write-Host "启动过程中发生错误: $($_.Exception.Message)" -ForegroundColor Red
     }
     finally {
-        Pop-Location
+        if (-not $useExe) {
+            Pop-Location
+        }
     }
 }
 
@@ -497,6 +524,8 @@ function Invoke-StatusCommand {
             Write-Host "从进程信息文件读取状态:" -ForegroundColor Cyan
             Write-Host "项目目录: $($processInfo.project_root)" -ForegroundColor Gray
             Write-Host "启动时间: $($processInfo.start_time)" -ForegroundColor White
+            $launchMode = if ($processInfo.launch_mode) { $processInfo.launch_mode } else { "python" }
+            Write-Host "启动模式: $(if ($launchMode -eq 'exe') { 'exe (编译版)' } else { 'python (解释器)' })" -ForegroundColor White
             Write-Host "日志目录: $($processInfo.log_dir)" -ForegroundColor Gray
             Write-Host "使用 'ch logs' 查看日志" -ForegroundColor Gray
             Write-Host ""
@@ -525,25 +554,28 @@ function Invoke-StatusCommand {
         Write-Host "未找到进程信息文件，手动搜索相关进程..." -ForegroundColor Yellow
         Write-Host ""
 
-        # 搜索相关的 uv 和 Python 进程
+        # 搜索相关的 uv、Python 和 exe 进程
         $allProcesses = @()
         $allProcesses += Get-Process -Name "uv*" -ErrorAction SilentlyContinue
         $allProcesses += Get-Process -Name "python*" -ErrorAction SilentlyContinue
+        $allProcesses += Get-Process -Name "yt_dlp_downloader" -ErrorAction SilentlyContinue
+        $allProcesses += Get-Process -Name "telegram_bot" -ErrorAction SilentlyContinue
         $foundProcesses = $false
 
         foreach ($process in $allProcesses) {
             try {
+                $processName = $process.ProcessName
                 $commandLine = $process.CommandLine
-                if ($commandLine -like "*yt_dlp_downloader.py*") {
+                if ($processName -eq "yt_dlp_downloader" -or $commandLine -like "*yt_dlp_downloader.py*") {
                     Write-Host "找到 YouTube 下载器进程:" -ForegroundColor Green
-                    Write-Host "  进程名: $($process.ProcessName)" -ForegroundColor White
+                    Write-Host "  进程名: $processName" -ForegroundColor White
                     Write-Host "  PID: $($process.Id)" -ForegroundColor White
                     Write-Host "  内存: $([math]::Round($process.WorkingSet64/1MB, 2))MB" -ForegroundColor White
                     $foundProcesses = $true
                 }
-                elseif ($commandLine -like "*telegram_bot.py*") {
+                elseif ($processName -eq "telegram_bot" -or $commandLine -like "*telegram_bot.py*") {
                     Write-Host "找到 Telegram 机器人进程:" -ForegroundColor Green
-                    Write-Host "  进程名: $($process.ProcessName)" -ForegroundColor White
+                    Write-Host "  进程名: $processName" -ForegroundColor White
                     Write-Host "  PID: $($process.Id)" -ForegroundColor White
                     Write-Host "  内存: $([math]::Round($process.WorkingSet64/1MB, 2))MB" -ForegroundColor White
                     $foundProcesses = $true
@@ -555,7 +587,7 @@ function Invoke-StatusCommand {
         }
 
         if (-not $foundProcesses) {
-            Write-Host "未找到相关的 uv/Python 进程" -ForegroundColor Yellow
+            Write-Host "未找到相关进程" -ForegroundColor Yellow
             Write-Host "提示: 如果进程正在运行，可能需要管理员权限来查看详细信息" -ForegroundColor Gray
         }
     }
@@ -1104,6 +1136,12 @@ function Get-AllRelatedProcesses {
         return $false
     }
     $allProcesses += $cmdProcesses
+
+    # 查找编译版 exe 进程（yt_dlp_downloader.exe / telegram_bot.exe）
+    $exeProcesses = @()
+    $exeProcesses += Get-Process -Name "yt_dlp_downloader" -ErrorAction SilentlyContinue
+    $exeProcesses += Get-Process -Name "telegram_bot" -ErrorAction SilentlyContinue
+    $allProcesses += $exeProcesses
 
     return $allProcesses
 }

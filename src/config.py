@@ -28,7 +28,18 @@ def _get_sys_logger():
     return _sys_logger
 
 # 获取项目根目录
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# PyInstaller 打包后 __file__ 指向临时解压目录，需要通过 sys.executable 定位
+if getattr(sys, 'frozen', False):
+    # PyInstaller 打包的 exe：exe 位于 dist/ 目录下，项目根 = exe 父目录的父目录
+    _exe_dir = os.path.dirname(os.path.abspath(sys.executable))
+    if os.path.basename(_exe_dir).lower() == 'dist':
+        PROJECT_ROOT = os.path.dirname(_exe_dir)
+    else:
+        # exe 直接在项目根目录中
+        PROJECT_ROOT = _exe_dir
+else:
+    # 普通 Python 运行：config.py 位于 src/ 目录下
+    PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # ============================================================
 # 配置提供者管理
