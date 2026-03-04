@@ -293,6 +293,19 @@ yt_base_url = "https://www.youtube.com/"
 # 文件系统非法字符（Windows + Linux）
 ILLEGAL_FILENAME_CHARS = '<>:"/\\|?*'
 
+# 统一 HTTP 请求头（Accept-Language 对 YouTube InnerTube API 无效，保留作为通用 header）
+PREFERRED_HTTP_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "zh-TW,zh-CN;q=0.9,zh;q=0.8,en;q=0.7,ja;q=0.6",
+    "Sec-Fetch-Mode": "navigate",
+}
+
+# YouTube 提取器语言参数：通过 InnerTube API 的 hl 字段控制标题语言
+# 优先返回繁体中文，YouTube 会自动 fallback：zh-TW → zh-CN → 视频默认语言
+# 注意：值必须为 list，传字符串会导致 yt-dlp 逐字符解析报错
+PREFERRED_YT_EXTRACTOR_ARGS = {'youtube': {'lang': ['zh-TW']}}
+
 
 def sanitize_filename(filename: str) -> str:
     """
@@ -532,10 +545,39 @@ def member_content_filter(info_dict):
         return None
 
 
-def combined_filter(info_dict):
-    """组合过滤器：同时应用时间过滤和会员内容过滤"""
+def shorts_filter(info_dict):
+    """过滤 YouTube Shorts（短视频）"""
     try:
-        # 先检查会员内容过滤
+        video_id = info_dict.get('id', '')
+
+        # 通过 URL 判断：yt-dlp 对 Shorts 的 webpage_url 包含 /shorts/
+        url = info_dict.get('webpage_url') or info_dict.get('url') or ''
+        if '/shorts/' in url:
+            logger.trace(f"⏭️ 跳过 Shorts（URL含/shorts/）: {video_id}")
+            return "YouTube Shorts"
+
+        # 通过时长判断：Shorts 定义为 ≤ 60 秒
+        # 注意：extract_flat=True 时 duration 可能为 None，None 时不过滤
+        duration = info_dict.get('duration')
+        if duration is not None and duration <= 60:
+            logger.trace(f"⏭️ 跳过 Shorts（时长{duration}s≤60s）: {video_id}")
+            return "YouTube Shorts (时长≤60s)"
+
+        return None
+    except Exception as e:
+        logger.warning(f"Shorts过滤器错误: {e}")
+        return None
+
+
+def combined_filter(info_dict):
+    """组合过滤器：同时应用时间过滤、Shorts过滤和会员内容过滤"""
+    try:
+        # 先检查 Shorts 过滤
+        shorts_result = shorts_filter(info_dict)
+        if shorts_result:
+            return shorts_result
+
+        # 再检查会员内容过滤
         member_result = member_content_filter(info_dict)
         if member_result:
             return member_result
@@ -639,12 +681,8 @@ def get_ydl_opts(custom_opts=None):
         "format_sort": ["+hasaud", "+hasvid", "+codec:opus", "+codec:aac", "+codec:mp3"],
         "format_fallback": True,
         "progress_hooks": [progress_hook],
-        "http_headers": {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Accept-Language": "en-us,en;q=0.5",
-            "Sec-Fetch-Mode": "navigate",
-        }
+        "http_headers": PREFERRED_HTTP_HEADERS,
+        "extractor_args": PREFERRED_YT_EXTRACTOR_ARGS,
     }
     
     base_opts = apply_js_runtime(base_opts)
@@ -741,66 +779,117 @@ def dl_audio_latest(channel_name, audio_folder=None, group_name=None):
     video_title = None
     video_id = None
     
-    # 第一步：获取视频列表（使用测试脚本中成功的配置）
+    # 第一步：获取视频列表 - 依次从 /videos（普通视频）和 /streams（直播录播）获取，合并去重
     list_opts = {
         "quiet": True,
         "playlistend": max_videos,
         "cookiefile": COOKIES_FILE,
         "extract_flat": True,
+        "http_headers": PREFERRED_HTTP_HEADERS,
+        "extractor_args": PREFERRED_YT_EXTRACTOR_ARGS,
     }
     list_opts = apply_js_runtime(list_opts)
     
     with yt_dlp.YoutubeDL(list_opts) as list_ydl:
         try:
-            # YouTube频道结构变化：直接访问 /videos 页面获取视频列表
-            url = f"{yt_base_url}{channel_name}/videos"
-            log_with_context(logger, logging.INFO, "开始获取频道视频列表", yt_channel=channel_name, url=url)
-            channel_info = list_ydl.extract_info(url, download=False)
-            entries_count = len(channel_info.get('entries', [])) if channel_info else 0
-            
-            # 获取频道显示名（因为 extract_flat=True 时 entries 里可能没有）
             channel_display_name = None
-            if channel_info:
-                channel_display_name = channel_info.get('channel') or channel_info.get('uploader') or channel_info.get('title')
-                # 如果获取到的是 "Videos" 后缀的标题，尝试清理
-                if channel_display_name and channel_display_name.endswith(' - Videos'):
-                    channel_display_name = channel_display_name.replace(' - Videos', '')
-            
-            log_with_context(logger, logging.INFO, "频道信息获取完成", yt_channel=channel_name, display_name=channel_display_name, entries_count=entries_count)
-            
-            
-            if not channel_info or 'entries' not in channel_info:
-                log_with_context(
-                    logger, logging.WARNING,
-                    "频道未找到视频或信息不完整",
-                    yt_channel=channel_name
-                )
-                return False
-
-            # 处理返回的视频列表
-            # 注意：不使用 extract_flat 时，entries 可能是 LazyList 或 generator
             entries_to_download = []
-            raw_entries = channel_info.get('entries') if channel_info else []
-            
-            if raw_entries:
-                # 遍历 entries（可能是 generator）以筛选有效条目
-                for entry in raw_entries:
-                    if entry and isinstance(entry, dict):
-                        entries_to_download.append(entry)
-                        # 只获取 max_videos 个
-                        if len(entries_to_download) >= max_videos:
+            seen_ids: set = set()
+            tab_counts = {}  # 记录每个 tab 的条目数，供汇总日志使用
+
+            for tab in ["videos", "streams"]:
+                tab_url = f"{yt_base_url}{channel_name}/{tab}"
+                log_with_context(
+                    logger, logging.INFO,
+                    "开始获取频道视频列表" if tab == "videos" else "开始获取频道直播录播列表",
+                    yt_channel=channel_name, url=tab_url
+                )
+                try:
+                    tab_info = list_ydl.extract_info(tab_url, download=False)
+                except Exception as tab_err:
+                    log_with_context(
+                        logger, logging.WARNING,
+                        f"获取 /{tab} 列表失败，跳过",
+                        yt_channel=channel_name, error=str(tab_err)
+                    )
+                    tab_counts[tab] = 0
+                    continue
+
+                if not tab_info:
+                    log_with_context(
+                        logger, logging.WARNING,
+                        f"/{tab} 返回空结果，跳过",
+                        yt_channel=channel_name
+                    )
+                    tab_counts[tab] = 0
+                    continue
+
+                # 从第一个成功的请求中提取频道显示名
+                if channel_display_name is None:
+                    channel_display_name = (
+                        tab_info.get('channel')
+                        or tab_info.get('uploader')
+                        or tab_info.get('title')
+                    )
+                    for suffix in [' - Videos', ' - Streams', ' - Live']:
+                        if channel_display_name and channel_display_name.endswith(suffix):
+                            channel_display_name = channel_display_name[:-len(suffix)]
                             break
-            
+
+                if 'entries' not in tab_info:
+                    log_with_context(
+                        logger, TRACE_LEVEL,
+                        f"频道 /{tab} 无内容（该频道可能没有此类视频）",
+                        yt_channel=channel_name
+                    )
+                    tab_counts[tab] = 0
+                    continue
+
+                tab_added = 0
+                tab_dupes = 0
+                for entry in tab_info.get('entries') or []:
+                    if not entry or not isinstance(entry, dict):
+                        continue
+                    vid_id = entry.get('id')
+                    if vid_id and vid_id in seen_ids:
+                        tab_dupes += 1
+                        continue
+                    if vid_id:
+                        seen_ids.add(vid_id)
+                    entries_to_download.append(entry)
+                    tab_added += 1
+                    if len(entries_to_download) >= max_videos:
+                        break
+
+                tab_counts[tab] = tab_added
+                log_with_context(
+                    logger, logging.INFO,
+                    f"/{tab} 列表获取完成",
+                    yt_channel=channel_name,
+                    tab=tab,
+                    new_entries=tab_added,
+                    duplicates_skipped=tab_dupes
+                )
+
+                if len(entries_to_download) >= max_videos:
+                    break
+
+            entries_count = len(entries_to_download)
+            log_with_context(logger, logging.INFO, "频道信息获取完成",
+                yt_channel=channel_name, display_name=channel_display_name,
+                entries_count=entries_count,
+                from_videos=tab_counts.get('videos', 0),
+                from_streams=tab_counts.get('streams', 0))
+
             # 如果没有有效条目，记录警告
             if not entries_to_download:
                 log_with_context(
                     logger, logging.WARNING,
                     "频道视频列表为空或全部无效",
-                    yt_channel=channel_name,
-                    raw_entries_count=len(list(raw_entries)) if raw_entries else 0
+                    yt_channel=channel_name
                 )
                 return True  # 不算错误，可能是新频道或视频都被删了
-            
+
             # 记录找到的视频总数
             stats['total'] = len(entries_to_download)
             log_with_context(
@@ -867,28 +956,19 @@ def dl_audio_latest(channel_name, audio_folder=None, group_name=None):
                     })
                     continue
 
-                # 构建文件名：{频道名}.{video_id}.{title}.m4a
-                # 优先使用顶级频道信息中的显示名，因为 extract_flat=True 时 entry 中的 uploader 可能是 handle
-                uploader = channel_display_name or video_info.get('uploader') or video_info.get('channel') or channel_name or 'UnknownChannel'
-                safe_uploader = sanitize_filename(uploader)
-                
-                fulltitle = video_info.get('fulltitle') or video_info.get('title') or 'UnknownTitle'
-                safe_title = sanitize_filename(fulltitle)
-                
+                # 文件存在性检查：用 video_id 匹配，而非精确文件名。
+                # 标题语言由 yt-dlp 完整下载阶段（extractor_args lang=zh-TW 生效）决定，
+                # extract_flat 阶段的 lang 参数不可靠，不在此预计算文件名。
                 expected_audio_ext = ".m4a"
-                final_audio_filename_stem = f"{safe_uploader}.{video_id}.{safe_title}"
-                
-                temp_audio_path_without_ext = os.path.join(target_folder, final_audio_filename_stem)
-                expected_temp_audio_path = temp_audio_path_without_ext + ".tmp" + expected_audio_ext
-                possible_temp_paths = [
-                    expected_temp_audio_path,
-                    temp_audio_path_without_ext + expected_audio_ext,
-                ]
+                try:
+                    existing_files = [
+                        f for f in os.listdir(target_folder)
+                        if f'.{video_id}.' in f and f.endswith(expected_audio_ext) and '.tmp' not in f
+                    ]
+                except OSError:
+                    existing_files = []
 
-                # 正式文件路径（不带 .tmp）
-                final_destination_audio_path = os.path.join(target_folder, f"{final_audio_filename_stem}{expected_audio_ext}")
-
-                if os.path.exists(final_destination_audio_path):
+                if existing_files:
                     log_with_context(
                         logger, TRACE_LEVEL,
                         f"⏭️  文件已存在，跳过 {video_id}",
@@ -916,8 +996,22 @@ def dl_audio_latest(channel_name, audio_folder=None, group_name=None):
                     continue
                 
                 current_video_ydl_opts = ydl_opts.copy()
+                # 使用 %(title)s 模板：让 yt-dlp 在完整提取阶段（extractor_args lang=zh-TW 生效）
+                # 决定标题语言，避免 extract_flat=True 阶段 lang 不生效导致英文标题写入文件名。
                 # FFmpeg后处理器会将 filename.tmp 转换为 filename.tmp.m4a
-                current_video_ydl_opts['outtmpl'] = temp_audio_path_without_ext + '.tmp'
+                current_video_ydl_opts['outtmpl'] = os.path.join(
+                    target_folder, "%(uploader)s.%(id)s.%(title)s.tmp"
+                )
+                # 捕获实际下载文件路径（完整提取时 lang=zh-TW 生效，title 将是中文）
+                downloaded_file_info = {"path": None}
+                def per_video_progress_hook(d, _info=downloaded_file_info):
+                    if d['status'] == 'finished':
+                        path = d.get('filename', '')
+                        if path and '.tmp.f' not in os.path.basename(path):
+                            _info["path"] = path
+                current_video_ydl_opts['progress_hooks'] = list(
+                    current_video_ydl_opts.get('progress_hooks', [])
+                ) + [per_video_progress_hook]
 
                 # 先检查过滤器（避免被过滤的视频被误报为下载失败）
                 # 注意：extract_flat=True 时，video_info 可能缺少 timestamp/upload_date
@@ -996,11 +1090,24 @@ def dl_audio_latest(channel_name, audio_folder=None, group_name=None):
                 
                 try:
                     with yt_dlp.YoutubeDL(current_video_ydl_opts) as video_ydl:
-                        video_ydl.download([video_url]) 
-                    
-                    temp_audio_path = next((p for p in possible_temp_paths if os.path.exists(p)), None)
-                    if temp_audio_path:
+                        video_ydl.download([video_url])
+
+                    # 优先使用 progress hook 捕获的路径；否则按 video_id 扫描目录
+                    temp_audio_path = downloaded_file_info.get("path")
+                    if not temp_audio_path or not os.path.exists(temp_audio_path):
+                        temp_audio_path = None
+                        try:
+                            for fname in os.listdir(target_folder):
+                                if f'.{video_id}.' in fname and fname.endswith('.tmp.m4a'):
+                                    temp_audio_path = os.path.join(target_folder, fname)
+                                    break
+                        except OSError:
+                            pass
+
+                    if temp_audio_path and os.path.exists(temp_audio_path):
                         logger.trace(f"转换完成: {os.path.basename(temp_audio_path)}")
+                        # 最终文件名：去掉 stem 中的 .tmp（e.g., XXX.tmp.m4a → XXX.m4a）
+                        final_destination_audio_path = re.sub(r'\.tmp(\.m4a)$', r'\1', temp_audio_path)
                         if os.path.normcase(temp_audio_path) == os.path.normcase(final_destination_audio_path):
                             rename_ok = True
                         else:
@@ -1097,15 +1204,17 @@ def dl_audio_latest(channel_name, audio_folder=None, group_name=None):
                                 f"❌ 转换失败 {video_id} (文件未找到)",
                                 yt_channel=channel_name
                             )
-                            original_downloaded_file_actual_ext = None
-                            for ext_try in ['.webm', '.mp4', '.mkv', '.flv', '.avi', '.mov', '.opus', '.ogg', '.mp3']:
-                                potential_orig_file = temp_audio_path_without_ext + ext_try + '.tmp'
-                                if os.path.exists(potential_orig_file):
-                                    original_downloaded_file_actual_ext = ext_try
-                                    logger.warning(f"找到原始下载文件: {potential_orig_file}，但未转换为 {expected_audio_ext}")
-                                    break
-                            if not original_downloaded_file_actual_ext:
-                                logger.trace(f"原始下载文件也未找到 (尝试的模板: {temp_audio_path_without_ext}.*.tmp)")
+                            found_raw = False
+                            try:
+                                for fname in os.listdir(target_folder):
+                                    if f'.{video_id}.' in fname and fname.endswith('.tmp') and not fname.endswith('.m4a'):
+                                        logger.warning(f"找到原始下载文件: {os.path.join(target_folder, fname)}，但未转换为 {expected_audio_ext}")
+                                        found_raw = True
+                                        break
+                            except OSError:
+                                pass
+                            if not found_raw:
+                                logger.trace(f"原始下载文件也未找到（video_id={video_id}）")
 
                             stats['error'] += 1
                             stats['details'].append({
@@ -1168,7 +1277,17 @@ def dl_audio_latest(channel_name, audio_folder=None, group_name=None):
                             'reason': f'待首映: {premiere_info}'
                         })
                     elif 'requested range not satisfiable' in error_lower or 'http error 416' in error_lower:
-                        removed_chunks = cleanup_partial_files_for_base(temp_audio_path_without_ext)
+                        removed_chunks = 0
+                        try:
+                            for fname in list(os.listdir(target_folder)):
+                                if f'.{video_id}.' in fname and '.tmp' in fname:
+                                    try:
+                                        os.remove(os.path.join(target_folder, fname))
+                                        removed_chunks += 1
+                                    except OSError:
+                                        pass
+                        except OSError:
+                            pass
                         log_with_context(
                             logger, logging.WARNING,
                             f'🧹 HTTP 416：检测到无效的下载范围，已清理残留片段 {video_id}',
@@ -1202,19 +1321,17 @@ def dl_audio_latest(channel_name, audio_folder=None, group_name=None):
                             'status': 'error',
                             'reason': f'yt-dlp错误: {str(de)[:100]}'
                         })
-                    if os.path.exists(expected_temp_audio_path):
-                        try: 
-                            os.remove(expected_temp_audio_path)
-                            logger.trace(f"已清理部分下载的音频文件: {expected_temp_audio_path}")
-                        except OSError: pass
-                    for ext_try in ['.webm', '.mp4', '.mkv']:
-                        potential_orig_file = temp_audio_path_without_ext + ext_try + '.tmp'
-                        if os.path.exists(potential_orig_file):
-                            try:
-                                os.remove(potential_orig_file)
-                                logger.trace(f"已清理部分下载的视频文件: {potential_orig_file}")
-                            except OSError: pass
-                            break
+                    try:
+                        for fname in list(os.listdir(target_folder)):
+                            if f'.{video_id}.' in fname and '.tmp' in fname:
+                                path = os.path.join(target_folder, fname)
+                                try:
+                                    os.remove(path)
+                                    logger.trace(f"已清理部分下载临时文件: {path}")
+                                except OSError:
+                                    pass
+                    except OSError:
+                        pass
                     continue
                 except Exception as e:
                     error_msg = str(e)[:100] if len(str(e)) > 100 else str(e)
@@ -1578,6 +1695,8 @@ def dl_audio_story(channel_name: str, audio_folder: str, group_name: str, items_
         "quiet": True,
         "cookiefile": COOKIES_FILE,
         "playlistreverse": True,
+        "http_headers": PREFERRED_HTTP_HEADERS,
+        "extractor_args": PREFERRED_YT_EXTRACTOR_ARGS,
     }
     list_opts = apply_js_runtime(list_opts)
 
@@ -1606,34 +1725,98 @@ def dl_audio_story(channel_name: str, audio_folder: str, group_name: str, items_
             )
     selected_entries: list = []
     items_limit = max(1, int(items_per_run or 1))
-    channel_url = f"{yt_base_url}{channel_name}/videos"
 
-    try:
-        with yt_dlp.YoutubeDL(list_opts) as list_ydl:
-            channel_info = list_ydl.extract_info(channel_url, download=False)
-    except Exception as err:
-        log_with_context(
-            logger,
-            logging.ERROR,
-            "Story mode: failed to fetch channel entries",
-            yt_channel=channel_name,
-            error=str(err),
-        )
-        return False
-
+    # 依次从 /videos（普通视频）和 /streams（直播录播）获取内容，合并去重后按时间排序
     entries = []
-    raw_entries = channel_info.get("entries") if channel_info else None
-    if raw_entries is not None:
-        for entry in raw_entries:
-            if entry and isinstance(entry, dict):
+    seen_ids: set = set()
+    story_tab_counts = {}
+    with yt_dlp.YoutubeDL(list_opts) as list_ydl:
+        for tab in ["videos", "streams"]:
+            tab_url = f"{yt_base_url}{channel_name}/{tab}"
+            log_with_context(
+                logger, TRACE_LEVEL,
+                f"Story mode: 开始获取 /{tab} 列表",
+                yt_channel=channel_name, url=tab_url
+            )
+            try:
+                tab_info = list_ydl.extract_info(tab_url, download=False)
+            except Exception as err:
+                log_with_context(
+                    logger,
+                    logging.WARNING,
+                    f"Story mode: failed to fetch /{tab} entries, skipping",
+                    yt_channel=channel_name,
+                    error=str(err),
+                )
+                story_tab_counts[tab] = 0
+                continue
+
+            if not tab_info:
+                log_with_context(
+                    logger, logging.WARNING,
+                    f"Story mode: /{tab} 返回空结果，跳过",
+                    yt_channel=channel_name
+                )
+                story_tab_counts[tab] = 0
+                continue
+
+            raw_entries = tab_info.get("entries")
+            if raw_entries is None:
+                log_with_context(
+                    logger,
+                    TRACE_LEVEL,
+                    f"Story mode: 频道 /{tab} 无内容（该频道可能没有此类视频）",
+                    yt_channel=channel_name,
+                )
+                story_tab_counts[tab] = 0
+                continue
+
+            tab_added = 0
+            tab_dupes = 0
+            for entry in raw_entries:
+                if not entry or not isinstance(entry, dict):
+                    continue
+                vid_id = entry.get("id")
+                if vid_id and vid_id in seen_ids:
+                    tab_dupes += 1
+                    continue
+                if vid_id:
+                    seen_ids.add(vid_id)
                 entries.append(entry)
-    else:
+                tab_added += 1
+
+            story_tab_counts[tab] = tab_added
+            log_with_context(
+                logger, TRACE_LEVEL,
+                f"Story mode: /{tab} 列表获取完成",
+                yt_channel=channel_name,
+                tab=tab,
+                new_entries=tab_added,
+                duplicates_skipped=tab_dupes
+            )
+
+    if not entries:
         log_with_context(
             logger,
             logging.WARNING,
             "Story mode: channel returned no entries",
             yt_channel=channel_name,
         )
+
+    # 合并后按时间戳升序排列（最旧在前），与 playlistreverse=True 的预期顺序一致
+    def _sort_ts(e):
+        ts = _extract_timestamp_from_entry(e)
+        return ts if ts is not None else float('inf')
+    entries.sort(key=_sort_ts)
+
+    log_with_context(
+        logger, TRACE_LEVEL,
+        "Story mode: 频道条目合并完成",
+        yt_channel=channel_name,
+        total_entries=len(entries),
+        from_videos=story_tab_counts.get('videos', 0),
+        from_streams=story_tab_counts.get('streams', 0)
+    )
 
     if entries:
         if last_ts_int is not None:
