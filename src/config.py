@@ -50,6 +50,7 @@ _config_provider = None  # 全局配置提供者实例
 # 配置文件路径
 # ============================================================
 CONFIG_YAML_FILE = os.path.join(PROJECT_ROOT, "config", "config.yaml")
+NOTION_SYNCED_CONFIG_FILE = os.path.join(PROJECT_ROOT, "config", "notion-synced-config.yaml")
 CHANNELS_FILE = os.path.join(PROJECT_ROOT, "config", "channels.txt")
 ENV_FILE = os.path.join(PROJECT_ROOT, ".env")
 DEBUG_INFO = os.path.join(PROJECT_ROOT, "debug_closest_video.json")

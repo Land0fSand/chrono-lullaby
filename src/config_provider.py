@@ -999,6 +999,14 @@ class NotionConfigProvider(BaseConfigProvider):
         self._sent_archives_cache: Dict[str, set] = {}
 
         self._channel_page_id_map: Dict[str, str] = {}
+        self._synced_config_cache: Optional[Dict[str, Any]] = None
+        self._synced_config_mtime: Optional[float] = None
+
+        try:
+            import config as config_module
+            self._synced_config_file = Path(config_module.NOTION_SYNCED_CONFIG_FILE)
+        except Exception:
+            self._synced_config_file = Path.cwd() / "config" / "notion-synced-config.yaml"
     
 
     def _load_global_settings(self) -> Dict[str, Any]:
@@ -1038,6 +1046,23 @@ class NotionConfigProvider(BaseConfigProvider):
         if notion_settings:
 
             settings.update(notion_settings)
+            try:
+                self._write_synced_config(self._build_settings_snapshot_payload(notion_settings))
+            except Exception as e:
+                print(f"警告：写入 Notion 全局设置快照失败: {e}")
+        else:
+            synced_settings = self._load_global_settings_from_synced_config()
+            if synced_settings:
+                settings.update(synced_settings)
+                sys_logger = _get_sys_logger()
+                if sys_logger:
+                    from logger import log_with_context
+                    import logging
+                    log_with_context(
+                        sys_logger, logging.WARNING,
+                        "Notion 全局设置读取失败，回退到 notion-synced-config",
+                        snapshot_file=str(self._synced_config_file)
+                    )
 
         
 
@@ -1046,6 +1071,201 @@ class NotionConfigProvider(BaseConfigProvider):
         return self._global_settings_cache
 
     
+
+    def _read_synced_config(self, reload: bool = False) -> Dict[str, Any]:
+
+        """读取 Notion 运行时同步到本地的快照配置。"""
+
+        if not reload and self._synced_config_cache is not None and self._synced_config_file.exists():
+            try:
+                current_mtime = self._synced_config_file.stat().st_mtime
+                if self._synced_config_mtime == current_mtime:
+                    return self._synced_config_cache
+            except OSError:
+                pass
+
+        if not self._synced_config_file.exists():
+            self._synced_config_cache = {}
+            self._synced_config_mtime = None
+            return {}
+
+        try:
+            with open(self._synced_config_file, 'r', encoding='utf-8') as f:
+                data = yaml.safe_load(f) or {}
+
+            if not isinstance(data, dict):
+                data = {}
+
+            self._synced_config_cache = data
+            self._synced_config_mtime = self._synced_config_file.stat().st_mtime
+            return data
+        except Exception as e:
+            print(f"警告：读取 Notion 同步配置快照失败: {e}")
+            return {}
+
+    def _write_synced_config(self, updates: Dict[str, Any]) -> None:
+
+        """将最新的 Notion 配置写入本地快照文件，供异常回退使用。"""
+
+        snapshot = self._read_synced_config(reload=True)
+        if not isinstance(snapshot, dict):
+            snapshot = {}
+
+        snapshot.update(updates)
+        snapshot['source'] = 'notion'
+        snapshot['synced_at'] = datetime.now(timezone.utc).isoformat()
+
+        self._synced_config_file.parent.mkdir(parents=True, exist_ok=True)
+        temp_file = self._synced_config_file.with_suffix(self._synced_config_file.suffix + '.tmp')
+
+        with open(temp_file, 'w', encoding='utf-8') as f:
+            f.write("# 由 ChronoLullaby 运行时从 Notion 自动同步，请勿手动编辑\n")
+            yaml.safe_dump(snapshot, f, allow_unicode=True, sort_keys=False)
+
+        temp_file.replace(self._synced_config_file)
+        self._synced_config_cache = snapshot
+        try:
+            self._synced_config_mtime = self._synced_config_file.stat().st_mtime
+        except OSError:
+            self._synced_config_mtime = None
+
+    def _extract_settings_from_config_dict(self, config_data: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+
+        """从配置字典中提取 telegram/downloader 全局设置。"""
+
+        if not isinstance(config_data, dict):
+            return {}
+
+        settings = {}
+        telegram_config = config_data.get('telegram', {})
+        downloader_config = config_data.get('downloader', {})
+
+        if isinstance(telegram_config, dict):
+            if 'bot_token' in telegram_config:
+                settings['bot_token'] = telegram_config['bot_token']
+            if 'send_interval' in telegram_config:
+                settings['send_interval'] = telegram_config['send_interval']
+
+        if isinstance(downloader_config, dict):
+            for key in [
+                'download_interval', 'filter_days', 'max_videos_per_channel',
+                'video_delay_min', 'video_delay_max', 'channel_delay_min', 'channel_delay_max',
+                'config_check_interval'
+            ]:
+                if key in downloader_config:
+                    settings[key] = downloader_config[key]
+
+        return settings
+
+    def _build_settings_snapshot_payload(self, settings: Dict[str, Any]) -> Dict[str, Any]:
+
+        """将扁平化设置转换为快照文件中的 telegram/downloader 结构。"""
+
+        telegram_config = {}
+        downloader_config = {}
+
+        if 'bot_token' in settings:
+            telegram_config['bot_token'] = settings['bot_token']
+        if 'send_interval' in settings:
+            telegram_config['send_interval'] = settings['send_interval']
+
+        for key in [
+            'download_interval', 'filter_days', 'max_videos_per_channel',
+            'video_delay_min', 'video_delay_max', 'channel_delay_min', 'channel_delay_max',
+            'config_check_interval'
+        ]:
+            if key in settings:
+                downloader_config[key] = settings[key]
+
+        payload: Dict[str, Any] = {}
+        if telegram_config:
+            payload['telegram'] = telegram_config
+        if downloader_config:
+            payload['downloader'] = downloader_config
+        return payload
+
+    def _normalize_channel_groups(self, raw_groups: Any) -> List[Dict[str, Any]]:
+
+        """统一清洗频道组配置，便于 Notion/快照/YAML 复用同一格式。"""
+
+        processed: List[Dict[str, Any]] = []
+        if not isinstance(raw_groups, list):
+            return processed
+
+        for group in raw_groups:
+            grp = dict(group) if isinstance(group, dict) else {}
+            channel_type = (grp.get('channel_type') or 'realtime').lower()
+            grp['channel_type'] = 'story' if channel_type == 'story' else 'realtime'
+            grp['youtube_channels'] = [
+                ch.strip()
+                for ch in (grp.get('youtube_channels') or [])
+                if isinstance(ch, str) and ch.strip()
+            ]
+            grp['story_interval_seconds'] = int(grp.get('story_interval_seconds') or 86400)
+            grp['story_items_per_run'] = int(grp.get('story_items_per_run') or 1)
+
+            story_last_run_ts = grp.get('story_last_run_ts')
+            try:
+                grp['story_last_run_ts'] = int(story_last_run_ts) if story_last_run_ts is not None else None
+            except Exception:
+                grp['story_last_run_ts'] = None
+
+            story_last_timestamp = grp.get('story_last_timestamp')
+            if story_last_timestamp is not None and story_last_timestamp != '':
+                try:
+                    grp['story_last_timestamp'] = int(story_last_timestamp)
+                except Exception:
+                    grp.pop('story_last_timestamp', None)
+            else:
+                grp.pop('story_last_timestamp', None)
+
+            processed.append(grp)
+
+        return processed
+
+    def _serialize_channel_groups_for_snapshot(self, groups: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+
+        """去除内部字段后写入快照文件。"""
+
+        serialized: List[Dict[str, Any]] = []
+        for group in groups:
+            item = {
+                'name': group.get('name', ''),
+                'description': group.get('description', ''),
+                'enabled': group.get('enabled', True),
+                'telegram_chat_id': group.get('telegram_chat_id', ''),
+                'audio_folder': group.get('audio_folder', ''),
+                'youtube_channels': list(group.get('youtube_channels', [])),
+                'channel_type': group.get('channel_type', 'realtime'),
+            }
+
+            if item['channel_type'] == 'story':
+                item['story_interval_seconds'] = group.get('story_interval_seconds', 86400)
+                item['story_items_per_run'] = group.get('story_items_per_run', 1)
+                if group.get('story_last_video_id'):
+                    item['story_last_video_id'] = group.get('story_last_video_id')
+                if group.get('story_last_timestamp') is not None:
+                    item['story_last_timestamp'] = group.get('story_last_timestamp')
+                if group.get('story_last_run_ts') is not None:
+                    item['story_last_run_ts'] = group.get('story_last_run_ts')
+
+            serialized.append(item)
+
+        return serialized
+
+    def _load_global_settings_from_synced_config(self) -> Dict[str, Any]:
+
+        """从运行时快照读取最近一次成功同步的 Notion 全局设置。"""
+
+        snapshot = self._read_synced_config()
+        return self._extract_settings_from_config_dict(snapshot)
+
+    def _load_channel_groups_from_synced_config(self) -> List[Dict[str, Any]]:
+
+        """从运行时快照读取最近一次成功同步的 Notion 频道组。"""
+
+        snapshot = self._read_synced_config()
+        return self._normalize_channel_groups(snapshot.get('channel_groups', []))
 
     def _load_global_settings_from_notion(self) -> Optional[Dict[str, Any]]:
 
@@ -1165,49 +1385,64 @@ class NotionConfigProvider(BaseConfigProvider):
 
             return {}
 
-        
+        return self._extract_settings_from_config_dict(yaml_config)
 
-        settings = {}
+    def _load_channel_groups_from_yaml(self) -> List[Dict[str, Any]]:
+        """从本地 YAML 读取频道组，作为 Notion 异常时的兜底配置。"""
+        import config as config_module
 
-        telegram_config = yaml_config.get('telegram', {})
+        yaml_config = config_module.load_yaml_config()
+        if not yaml_config:
+            return []
 
-        downloader_config = yaml_config.get('downloader', {})
+        return self._normalize_channel_groups(yaml_config.get('channel_groups', []))
 
-        
+    def _fallback_channel_groups(self, reason: str) -> List[Dict[str, Any]]:
+        """Notion 频道分组读取失败时，优先回退到快照，再回退到手动 config.yaml。"""
+        sys_logger = _get_sys_logger()
 
-        if isinstance(telegram_config, dict):
+        if self._channel_groups_cache is not None:
+            if sys_logger:
+                from logger import log_with_context
+                import logging
+                log_with_context(
+                    sys_logger, logging.WARNING,
+                    "Notion 频道分组读取失败，回退到内存缓存",
+                    reason=reason,
+                    group_count=len(self._channel_groups_cache)
+                )
+            return self._channel_groups_cache
 
-            if 'bot_token' in telegram_config:
+        synced_groups = self._load_channel_groups_from_synced_config()
+        if synced_groups:
+            self._channel_groups_cache = synced_groups
+            if sys_logger:
+                from logger import log_with_context
+                import logging
+                log_with_context(
+                    sys_logger, logging.WARNING,
+                    "Notion 频道分组读取失败，回退到 notion-synced-config",
+                    reason=reason,
+                    group_count=len(synced_groups),
+                    snapshot_file=str(self._synced_config_file)
+                )
+            return synced_groups
 
-                settings['bot_token'] = telegram_config['bot_token']
+        yaml_groups = self._load_channel_groups_from_yaml()
+        if yaml_groups:
+            self._channel_groups_cache = yaml_groups
+            if sys_logger:
+                from logger import log_with_context
+                import logging
+                log_with_context(
+                    sys_logger, logging.WARNING,
+                    "Notion 频道分组读取失败，回退到手动 config.yaml",
+                    reason=reason,
+                    group_count=len(yaml_groups)
+                )
+            return yaml_groups
 
-            if 'send_interval' in telegram_config:
-
-                settings['send_interval'] = telegram_config['send_interval']
-
-        
-
-        if isinstance(downloader_config, dict):
-
-            for key in [
-
-                'download_interval', 'filter_days', 'max_videos_per_channel',
-
-                'video_delay_min', 'video_delay_max', 'channel_delay_min', 'channel_delay_max',
-
-                'config_check_interval'
-
-            ]:
-
-                if key in downloader_config:
-
-                    settings[key] = downloader_config[key]
-
-        
-
-        return settings
-
-    
+        return []
 
     def get_channel_groups(self, use_cache: bool = True) -> List[Dict[str, Any]]:
         """获取所有频道组配置"""
@@ -1216,7 +1451,7 @@ class NotionConfigProvider(BaseConfigProvider):
 
         database_id = self.config_data.get('database_ids', {}).get('config')
         if not database_id:
-            return []
+            return self._fallback_channel_groups('missing_config_database_id')
 
         try:
             pages = self.adapter.query_database(database_id)
@@ -1275,13 +1510,20 @@ class NotionConfigProvider(BaseConfigProvider):
 
                 groups.append(group)
 
+            try:
+                self._write_synced_config({
+                    'channel_groups': self._serialize_channel_groups_for_snapshot(groups)
+                })
+            except Exception as e:
+                print(f"警告：写入 Notion 频道组快照失败: {e}")
+
             if use_cache:
                 self._channel_groups_cache = groups
 
             return groups
         except Exception as e:
             print(f"警告：从 Notion 获取频道分组失败: {e}")
-            return []
+            return self._fallback_channel_groups(str(e))
     def get_telegram_token(self, group_index: int = 0) -> Optional[str]:
 
         """��ȡ Telegram Bot Token"""

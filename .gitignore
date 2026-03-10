@@ -112,6 +112,7 @@ mypy.ini
 
 # config files (keep example files only)
 /config/config.yaml
+/config/notion-synced-config.yaml
 /config/channels.txt
 /config/youtube.cookies
 
