@@ -19,176 +19,215 @@ import signal
 import subprocess
 import multiprocessing
 import logging
+import json
 from pathlib import Path
 from logger import get_logger, log_with_context, get_system_logger
 import config
+from runtime_guard import install_runtime_diagnostics
+from runtime_state import ProcessHeartbeat
 
 # 使用统一的日志系统
 logger = get_logger('launcher', level=logging.INFO)
 # 系统级日志（用于记录进程管理和系统事件）
 sys_logger = get_system_logger()
+PROJECT_ROOT = Path(__file__).parent.parent
+PROCESS_INFO_PATH = PROJECT_ROOT / 'data' / 'process_info.json'
+RESTART_BACKOFFS = [5, 15, 60, 300]
+RESTART_RESET_WINDOW = 300
+mark_runtime_shutdown = install_runtime_diagnostics(logger, "launcher")
+heartbeat = ProcessHeartbeat("launcher")
+
+
+def _write_process_info(downloader_pid=None, bot_pid=None):
+    """写入统一的进程信息文件，供 ch.ps1 status/stop 使用。"""
+    PROCESS_INFO_PATH.parent.mkdir(exist_ok=True)
+    process_info = {
+        'launcher_pid': os.getpid(),
+        'downloader_pid': downloader_pid,
+        'bot_pid': bot_pid,
+        'start_time': time.strftime('%Y-%m-%d %H:%M:%S'),
+        'project_root': str(PROJECT_ROOT),
+        'log_dir': str(PROJECT_ROOT / 'logs'),
+        'launch_mode': 'python-launcher',
+    }
+    with open(PROCESS_INFO_PATH, 'w', encoding='utf-8') as f:
+        json.dump(process_info, f, indent=2, ensure_ascii=False)
+
+def _run_downloader():
+    """子进程运行：YouTube 下载器"""
+    try:
+        subprocess.run([
+            sys.executable, "src/yt_dlp_downloader.py"
+        ], cwd=PROJECT_ROOT)
+    except Exception as e:
+        print(f"YouTube 下载器进程错误: {e}")
+
+def _run_bot():
+    """子进程运行：Telegram 机器人"""
+    try:
+        subprocess.run([
+            sys.executable, "src/telegram_bot.py"
+        ], cwd=PROJECT_ROOT)
+    except Exception as e:
+        print(f"Telegram 机器人进程错误: {e}")
 
 class ProcessManager:
     def __init__(self):
         self.downloader_process = None
         self.bot_process = None
         self.running = False
-    
-    def start_downloader(self):
-        """启动 YouTube 下载器"""
-        try:
-            logger.info("启动 YouTube 下载器...")
-            
-            # 使用subprocess启动，确保使用poetry环境
-            result = subprocess.run([
-                "poetry", "run", "python", "yt_dlp_downloader.py"
-            ], cwd=Path(__file__).parent)
-            
-        except Exception as e:
-            log_with_context(
-                logger, logging.ERROR,
-                "YouTube 下载器错误",
-                error=str(e)
-            )
-    
-    def start_bot(self):
-        """启动 Telegram 机器人"""
-        try:
-            logger.info("启动 Telegram 机器人...")
-            
-            # 使用subprocess启动，确保使用poetry环境
-            result = subprocess.run([
-                "poetry", "run", "python", "telegram_bot.py"
-            ], cwd=Path(__file__).parent)
-            
-        except Exception as e:
-            log_with_context(
-                logger, logging.ERROR,
-                "Telegram 机器人错误",
-                error=str(e)
-            )
+        self.restart_counts = {
+            "downloader": 0,
+            "bot": 0,
+        }
+        self.start_times = {
+            "downloader": None,
+            "bot": None,
+        }
     
     def signal_handler(self, signum, frame):
         """信号处理器"""
         logger.info("接收到停止信号，正在关闭所有进程...")
-        log_with_context(
-            sys_logger, logging.INFO,
-            "接收到系统信号",
-            signal=signum,
-            downloader_alive=self.downloader_process.is_alive() if self.downloader_process else False,
-            bot_alive=self.bot_process.is_alive() if self.bot_process else False
-        )
+        heartbeat.update("signal_stop", signal=signum)
+        mark_runtime_shutdown(f"signal_{signum}", expected=True)
         self.stop_all()
         sys.exit(0)
     
     def stop_all(self):
         """停止所有进程"""
         self.running = False
+        heartbeat.update("stopping_children")
         sys_logger.info("开始停止所有子进程")
         
         if self.downloader_process and self.downloader_process.is_alive():
             logger.info("停止 YouTube 下载器...")
-            log_with_context(
-                sys_logger, logging.INFO,
-                "终止下载器进程",
-                pid=self.downloader_process.pid
-            )
             self.downloader_process.terminate()
             self.downloader_process.join(timeout=5)
             if self.downloader_process.is_alive():
-                sys_logger.warning("下载器进程未响应 terminate，使用 kill")
                 self.downloader_process.kill()
         
         if self.bot_process and self.bot_process.is_alive():
             logger.info("停止 Telegram 机器人...")
-            log_with_context(
-                sys_logger, logging.INFO,
-                "终止机器人进程",
-                pid=self.bot_process.pid
-            )
             self.bot_process.terminate()
             self.bot_process.join(timeout=5)
             if self.bot_process.is_alive():
-                sys_logger.warning("机器人进程未响应 terminate，使用 kill")
                 self.bot_process.kill()
-        
+
+        _write_process_info(downloader_pid=None, bot_pid=None)
+        heartbeat.stop("children_stopped")
+
         logger.info("所有进程已停止")
         sys_logger.info("所有子进程已停止")
+
+    def _start_downloader(self):
+        self.downloader_process = multiprocessing.Process(
+            target=_run_downloader,
+            name="YouTubeDownloader"
+        )
+        self.downloader_process.start()
+        logger.info(f"YouTube 下载器已启动 (PID: {self.downloader_process.pid})")
+        self.start_times["downloader"] = time.time()
+        heartbeat.update("downloader_started", pid=self.downloader_process.pid)
+        _write_process_info(
+            downloader_pid=self.downloader_process.pid,
+            bot_pid=self.bot_process.pid if self.bot_process else None,
+        )
+
+    def _start_bot(self):
+        self.bot_process = multiprocessing.Process(
+            target=_run_bot,
+            name="TelegramBot"
+        )
+        self.bot_process.start()
+        logger.info(f"Telegram 机器人已启动 (PID: {self.bot_process.pid})")
+        self.start_times["bot"] = time.time()
+        heartbeat.update("bot_started", pid=self.bot_process.pid)
+        _write_process_info(
+            downloader_pid=self.downloader_process.pid if self.downloader_process else None,
+            bot_pid=self.bot_process.pid,
+        )
+        log_with_context(
+            sys_logger, logging.INFO,
+            "机器人进程已启动",
+            process_name="TelegramBot",
+            pid=self.bot_process.pid
+        )
+
+    def _restart_process(self, process_name):
+        retry_index = min(self.restart_counts[process_name], len(RESTART_BACKOFFS) - 1)
+        delay = RESTART_BACKOFFS[retry_index]
+        self.restart_counts[process_name] += 1
+
+        log_with_context(
+            sys_logger, logging.WARNING,
+            "子进程退出，准备自动重启",
+            process_name=process_name,
+            restart_attempt=self.restart_counts[process_name],
+            delay_seconds=delay,
+        )
+        heartbeat.update(
+            "restarting_child",
+            process_name=process_name,
+            restart_attempt=self.restart_counts[process_name],
+            delay_seconds=delay,
+        )
+        time.sleep(delay)
+
+        if process_name == "downloader":
+            self._start_downloader()
+        else:
+            self._start_bot()
+
+    def _maybe_reset_restart_count(self, process_name):
+        started_at = self.start_times.get(process_name)
+        if started_at and (time.time() - started_at) >= RESTART_RESET_WINDOW:
+            if self.restart_counts[process_name] != 0:
+                logger.info(f"{process_name} 已稳定运行，重置重启计数")
+            self.restart_counts[process_name] = 0
     
     def start(self):
         """启动所有服务"""
         logger.info("=== ChronoLullaby 启动器 ===")
         logger.info("按 Ctrl+C 停止所有服务")
         sys_logger.info("启动器初始化")
+        heartbeat.start()
+        heartbeat.update("launcher_starting")
         
         # 设置信号处理器
         signal.signal(signal.SIGINT, self.signal_handler)
         signal.signal(signal.SIGTERM, self.signal_handler)
         
         try:
-            # 启动下载器进程
-            self.downloader_process = multiprocessing.Process(
-                target=self.start_downloader,
-                name="YouTubeDownloader"
-            )
-            self.downloader_process.start()
-            log_with_context(
-                logger, logging.INFO,
-                "YouTube 下载器已启动",
-                pid=self.downloader_process.pid
-            )
-            log_with_context(
-                sys_logger, logging.INFO,
-                "下载器进程已启动",
-                process_name="YouTubeDownloader",
-                pid=self.downloader_process.pid
-            )
+            self._start_downloader()
             
             # 等待2秒再启动机器人
             time.sleep(2)
             
-            # 启动机器人进程
-            self.bot_process = multiprocessing.Process(
-                target=self.start_bot,
-                name="TelegramBot"
-            )
-            self.bot_process.start()
-            log_with_context(
-                logger, logging.INFO,
-                "Telegram 机器人已启动",
-                pid=self.bot_process.pid
-            )
-            log_with_context(
-                sys_logger, logging.INFO,
-                "机器人进程已启动",
-                process_name="TelegramBot",
-                pid=self.bot_process.pid
-            )
+            self._start_bot()
             
             self.running = True
             
-            # 保存进程信息
-            process_info = {
-                'downloader_pid': self.downloader_process.pid,
-                'bot_pid': self.bot_process.pid,
-                'start_time': time.strftime('%Y-%m-%d %H:%M:%S')
-            }
-
-            # 确保 data 目录存在
-            data_dir = Path(__file__).parent / 'data'
-            data_dir.mkdir(exist_ok=True)
-
-            import json
-            with open(data_dir / 'process_info.json', 'w', encoding='utf-8') as f:
-                json.dump(process_info, f, indent=2, ensure_ascii=False)
-            
-            logger.info("进程信息已保存到 data/process_info.json")
+            logger.info(f"进程信息已保存到 {PROCESS_INFO_PATH}")
             logger.info("服务正在运行...")
             sys_logger.info("所有服务已启动，进入监控循环")
+            heartbeat.update(
+                "monitoring",
+                downloader_pid=self.downloader_process.pid if self.downloader_process else None,
+                bot_pid=self.bot_process.pid if self.bot_process else None,
+            )
             
             # 监控进程状态
             while self.running:
                 time.sleep(10)  # 每10秒检查一次
+                self._maybe_reset_restart_count("downloader")
+                self._maybe_reset_restart_count("bot")
+                heartbeat.update(
+                    "monitoring",
+                    downloader_pid=self.downloader_process.pid if self.downloader_process else None,
+                    downloader_alive=self.downloader_process.is_alive() if self.downloader_process else False,
+                    bot_pid=self.bot_process.pid if self.bot_process else None,
+                    bot_alive=self.bot_process.is_alive() if self.bot_process else False,
+                )
                 
                 # 检查进程是否还在运行
                 if not self.downloader_process.is_alive():
@@ -200,7 +239,8 @@ class ProcessManager:
                         pid=self.downloader_process.pid,
                         exitcode=self.downloader_process.exitcode
                     )
-                    break
+                    self._restart_process("downloader")
+                    continue
                 
                 if not self.bot_process.is_alive():
                     logger.warning("Telegram 机器人进程意外退出")
@@ -211,11 +251,14 @@ class ProcessManager:
                         pid=self.bot_process.pid,
                         exitcode=self.bot_process.exitcode
                     )
-                    break
+                    self._restart_process("bot")
+                    continue
         
         except KeyboardInterrupt:
             logger.info("接收到中断信号...")
             sys_logger.info("接收到 KeyboardInterrupt")
+            heartbeat.update("keyboard_interrupt")
+            mark_runtime_shutdown("keyboard_interrupt", expected=True)
         except Exception as e:
             log_with_context(
                 logger, logging.ERROR,
@@ -228,8 +271,11 @@ class ProcessManager:
                 error=str(e),
                 error_type=type(e).__name__
             )
+            heartbeat.update("launcher_exception", error=str(e), error_type=type(e).__name__)
+            mark_runtime_shutdown("unhandled_exception", error=str(e))
         finally:
             self.stop_all()
+            mark_runtime_shutdown("main_return", expected=True)
 
 def main():
     # 确保在正确的目录中
@@ -296,4 +342,4 @@ def main():
     manager.start()
 
 if __name__ == "__main__":
-    main() 
+    main()

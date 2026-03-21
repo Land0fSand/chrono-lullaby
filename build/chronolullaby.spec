@@ -47,6 +47,8 @@ common_hiddenimports = [
     'config',
     'config_provider',
     'logger',
+    'runtime_guard',
+    'runtime_state',
     'util',
     'notion_adapter',
     'notion_sync',

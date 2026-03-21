@@ -15,12 +15,12 @@ YouTube 更新了反机器人算法，旧版 yt-dlp 无法解密。
 
 1. **升级 yt-dlp**
    ```powershell
-   poetry update yt-dlp
+   uv pip install -U --pre yt-dlp
    ```
 
 2. **安装 yt-dlp-ejs**（提供 JavaScript 运行时支持）
    ```powershell
-   poetry add yt-dlp-ejs
+   uv pip install -U yt-dlp-ejs
    ```
 
 3. **确保有 Node.js**
@@ -29,8 +29,23 @@ YouTube 更新了反机器人算法，旧版 yt-dlp 无法解密。
 
 4. **重启服务**
    ```powershell
-   .\ch restart
+   .\ch restart -m notion
    ```
+
+### 关于 Cookies 的补充说明
+
+- `cookie` 不是公开频道列表抓取、公开节目下载的必需条件。
+- 公开内容在未登录状态下通常仍可获取；即使日志提示 `The provided YouTube account cookies are no longer valid`，公开节目仍可能继续下载成功。
+- `cookie` 更适用于会员内容、年龄限制内容、部分风控场景，或作为重试时的附加登录态。
+- 2026-03-10 之后的聚合日志表明：程序可以在 `cookie invalid` 告警存在时，仍成功获取公开频道 `/videos` 列表并下载公开视频。
+
+### 重构备注
+
+- 后续可考虑将下载策略调整为：
+  1. 先尝试不带 `cookie` 获取公开内容。
+  2. 若遇到受限内容、权限校验或明确需要登录态的错误，再使用 `cookie` 重试。
+- 这样可以避免把 `cookie` 当作公开视频下载的前置依赖，也能减少“cookie 失效”告警对公开内容链路的干扰。
+- TODO: 当前部分模块在 import 阶段会触发配置读取、Notion 访问或同步服务初始化。后续可把这类副作用尽量收敛到显式入口 `main()`，降低导入检查、测试和调试时的副作用。
 
 ---
 
@@ -39,7 +54,7 @@ YouTube 更新了反机器人算法，旧版 yt-dlp 无法解密。
 ### 导出 Notion 配置到本地
 
 ```powershell
-poetry run python scripts/export_notion_config.py
+uv run python scripts/export_notion_config.py
 ```
 
 这会输出完整的 YAML 配置。
@@ -47,7 +62,7 @@ poetry run python scripts/export_notion_config.py
 ### 保存到文件
 
 ```powershell
-poetry run python scripts/export_notion_config.py > config/config_new.yaml
+uv run python scripts/export_notion_config.py > config/config_new.yaml
 ```
 
 ### 修改 config.yaml
@@ -83,4 +98,6 @@ Story 类型频道的进度字段：
 .\ch status             # 查看状态
 .\ch logs               # 查看日志
 .\ch logs -f            # 实时跟踪日志
+.\ch ytdlp-watch -m notion         # 持续监控 yt-dlp 新版本并自动升级+重启
+.\ch ytdlp-watch --once --dry-run  # 单次检测，不执行变更
 ```

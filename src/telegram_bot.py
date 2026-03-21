@@ -3,6 +3,7 @@
 import os
 import sys
 import time
+import asyncio
 
 # 设置默认编码为UTF-8
 if sys.stdout.encoding != 'utf-8':
@@ -25,9 +26,11 @@ from config import (
 )
 from util import get_channel_groups_with_details, show_chat_id
 from logger import get_logger
+from runtime_guard import install_runtime_diagnostics
 
 # 使用统一的日志系统
 logger = get_logger('bot', separate_error_file=True)
+mark_runtime_shutdown = install_runtime_diagnostics(logger, "telegram_bot")
 
 # 加载环境变量（如果使用传统配置）
 load_dotenv(ENV_FILE)
@@ -49,6 +52,98 @@ if not CHAT_ID:
     sys.exit(1)
 
 logger.info(f"🛠️ 配置加载成功：发送检查间隔 = {SEND_INTERVAL} 秒 ({SEND_INTERVAL/60:.1f} 分钟)")
+
+
+def _create_application() -> Application:
+    """为每次启动/重试创建全新的 Application，避免复用已关闭的事件循环。"""
+    request = HTTPXRequest(
+        read_timeout=120,
+        write_timeout=120,
+        connect_timeout=60,
+        pool_timeout=60,
+        connection_pool_size=8,
+    )
+    return Application.builder().token(TOKEN).request(request).build()
+
+
+def _configure_application(application: Application) -> None:
+    """注册任务和处理器。"""
+    application.add_error_handler(error_callback)
+
+    channel_groups = get_channel_groups_with_details()
+
+    if not channel_groups:
+        logger.error("❌ 未找到任何频道组配置！")
+        logger.error("请在 config.yaml 中配置 channel_groups")
+        sys.exit(1)
+
+    logger.info(f"✅ 找到 {len(channel_groups)} 个频道组配置")
+
+    for idx, group in enumerate(channel_groups):
+        group_name = group['name']
+        chat_id = group['telegram_chat_id']
+        audio_folder = group['audio_folder']
+
+        if not chat_id:
+            logger.warning(f"⚠️  频道组 '{group_name}' 未配置 telegram_chat_id，跳过")
+            continue
+
+        first_delay = 10 + (idx * 10)
+        task_func = create_send_file_task(chat_id, audio_folder, group_name)
+        application.job_queue.run_repeating(
+            task_func,
+            interval=SEND_INTERVAL,
+            first=first_delay,
+            name=f"send_task_{group_name}"
+        )
+
+        logger.info(
+            f"📤 已配置发送任务: {group_name} -> {chat_id}\n"
+            f"   音频目录: {audio_folder}\n"
+            f"   检查间隔: {SEND_INTERVAL}秒 ({SEND_INTERVAL/60:.1f}分钟)\n"
+            f"   首次延迟: {first_delay}秒"
+        )
+
+    logger.info("✅ 所有发送任务已配置完成")
+
+    application.add_handler(CommandHandler("addchannel", add_channel))
+    application.add_handler(CommandHandler("chatid", show_chat_id))
+    application.add_handler(CommandHandler("test", test_command))
+
+    application.add_handler(MessageHandler(
+        filters.UpdateType.CHANNEL_POST & filters.Regex(r'^/addchannel'),
+        add_channel
+    ))
+    application.add_handler(MessageHandler(
+        filters.UpdateType.CHANNEL_POST & filters.Regex(r'^/chatid'),
+        show_chat_id
+    ))
+    application.add_handler(MessageHandler(
+        filters.UpdateType.CHANNEL_POST & filters.Regex(r'^/test'),
+        test_command
+    ))
+
+    application.add_handler(MessageHandler(
+        (filters.TEXT & ~filters.COMMAND) |
+        (filters.UpdateType.CHANNEL_POST & filters.TEXT & ~filters.Regex(r'^/')),
+        echo_handler
+    ))
+
+    logger.info("✅ 已注册命令: /addchannel, /chatid, /test（支持私聊/群组/频道）")
+    logger.info("✅ 已注册消息处理器（调试模式）")
+
+
+def _prepare_fresh_event_loop() -> None:
+    """确保 run_polling 每次都运行在新的事件循环上。"""
+    try:
+        current_loop = asyncio.get_event_loop()
+    except RuntimeError:
+        current_loop = None
+
+    if current_loop and not current_loop.is_closed():
+        current_loop.close()
+
+    asyncio.set_event_loop(asyncio.new_event_loop())
 
 def create_send_file_task(chat_id: str, audio_folder: str, group_name: str):
     """
@@ -143,98 +238,15 @@ async def error_callback(update, context):
         os._exit(1)
 
 def main():
-    # 增加超时设置，添加连接池配置
-    request = HTTPXRequest(
-        read_timeout=120,  # 增加读取超时
-        write_timeout=120,  # 增加写入超时
-        connect_timeout=60,  # 连接超时
-        pool_timeout=60,  # 连接池超时
-        connection_pool_size=8,  # 连接池大小
-        # proxy_url 参数在新版本中已移除，如需代理请使用 httpx 的方式配置
-    )
-    
-    application = Application.builder().token(TOKEN).request(request).build()
-    
-    # 添加错误处理器
-    application.add_error_handler(error_callback)
-    
-    # 获取频道组配置
-    channel_groups = get_channel_groups_with_details()
-    
-    if not channel_groups:
-        logger.error("❌ 未找到任何频道组配置！")
-        logger.error("请在 config.yaml 中配置 channel_groups")
-        sys.exit(1)
-    
-    logger.info(f"✅ 找到 {len(channel_groups)} 个频道组配置")
-    
-    # 为每个频道组创建独立的发送任务
-    for idx, group in enumerate(channel_groups):
-        group_name = group['name']
-        chat_id = group['telegram_chat_id']
-        audio_folder = group['audio_folder']
-        
-        if not chat_id:
-            logger.warning(f"⚠️  频道组 '{group_name}' 未配置 telegram_chat_id，跳过")
-            continue
-        
-        # 为每个组错开启动时间，避免同时发送
-        first_delay = 10 + (idx * 10)
-        
-        # 创建该组的发送任务
-        task_func = create_send_file_task(chat_id, audio_folder, group_name)
-        application.job_queue.run_repeating(
-            task_func,
-            interval=SEND_INTERVAL,
-            first=first_delay,
-            name=f"send_task_{group_name}"
-        )
-        
-        logger.info(
-            f"📤 已配置发送任务: {group_name} -> {chat_id}\n"
-            f"   音频目录: {audio_folder}\n"
-            f"   检查间隔: {SEND_INTERVAL}秒 ({SEND_INTERVAL/60:.1f}分钟)\n"
-            f"   首次延迟: {first_delay}秒"
-        )
-    
-    logger.info(f"✅ 所有发送任务已配置完成")
-    
-    # 注册命令处理器（私聊/群组）
-    application.add_handler(CommandHandler("addchannel", add_channel))
-    application.add_handler(CommandHandler("chatid", show_chat_id))
-    application.add_handler(CommandHandler("test", test_command))
-    
-    # 注册频道命令处理器（频道消息需要单独处理）
-    application.add_handler(MessageHandler(
-        filters.UpdateType.CHANNEL_POST & filters.Regex(r'^/addchannel'), 
-        add_channel
-    ))
-    application.add_handler(MessageHandler(
-        filters.UpdateType.CHANNEL_POST & filters.Regex(r'^/chatid'), 
-        show_chat_id
-    ))
-    application.add_handler(MessageHandler(
-        filters.UpdateType.CHANNEL_POST & filters.Regex(r'^/test'), 
-        test_command
-    ))
-    
-    # 注册消息处理器（用于调试，记录所有收到的文本消息，但排除命令）
-    # 注意：这个要放在最后，优先级最低
-    application.add_handler(MessageHandler(
-        (filters.TEXT & ~filters.COMMAND) | 
-        (filters.UpdateType.CHANNEL_POST & filters.TEXT & ~filters.Regex(r'^/')),
-        echo_handler
-    ))
-    
-    logger.info("✅ 已注册命令: /addchannel, /chatid, /test（支持私聊/群组/频道）")
-    logger.info("✅ 已注册消息处理器（调试模式）")
-    
-    # 添加重试机制的轮询
     max_retries = 5
     retry_count = 0
-    
+
     while retry_count < max_retries:
+        application = None
         try:
+            _prepare_fresh_event_loop()
+            application = _create_application()
+            _configure_application(application)
             logger.info(f"🤖 启动 Telegram Bot 轮询 (尝试 {retry_count + 1}/{max_retries})")
             application.run_polling(
                 drop_pending_updates=True,  # 忽略待处理的更新
@@ -248,11 +260,23 @@ def main():
                 logger.info(f"⏳ 等待 {wait_time} 秒后重试...")
                 time.sleep(wait_time)
             else:
+                mark_runtime_shutdown("network_error_max_retries", expected=False)
                 logger.error("🛑 达到最大重试次数，程序退出")
                 raise
         except Exception as e:
+            mark_runtime_shutdown("unexpected_exception", expected=False)
             logger.error(f"意外错误: {e}")
             raise
+        finally:
+            try:
+                current_loop = asyncio.get_event_loop()
+                if current_loop and not current_loop.is_closed():
+                    current_loop.close()
+            except RuntimeError:
+                pass
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    finally:
+        mark_runtime_shutdown("main_return", expected=True)

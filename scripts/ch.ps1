@@ -8,9 +8,15 @@
 #   3. 然后就可以在任意目录运行：ch start, ch status, ch logs 等
 
 param(
+    [Parameter(Position = 0)]
     [string]$Command,
+    [Parameter()]
     [Alias("m")]
     [string]$Mode = "",  # 配置模式：local 或 notion（支持 --mode 或 -m）
+    [Parameter()]
+    [Alias("r")]
+    [string]$RunMode = "",  # 运行模式：python / auto（支持 --run-mode 或 -r）
+    [Parameter(Position = 1, ValueFromRemainingArguments = $true)]
     [string[]]$Arguments = @()
 )
 
@@ -24,13 +30,18 @@ function Show-Help {
     Write-Host "  start                    启动服务 (默认命令)" -ForegroundColor White
     Write-Host "  stop                     停止服务" -ForegroundColor White
     Write-Host "  restart                  重启服务 (停止后重新启动)" -ForegroundColor White
+    Write-Host "  ensure-running           仅在服务未运行时启动" -ForegroundColor White
     Write-Host "  status                   查看服务状态" -ForegroundColor White
+    Write-Host "  install-autostart        安装开机自启和保活计划任务" -ForegroundColor White
+    Write-Host "  uninstall-autostart      删除开机自启和保活计划任务" -ForegroundColor White
+    Write-Host "  autostart-status         查看计划任务状态" -ForegroundColor White
     Write-Host "  logs     [类型] [选项]   查看日志" -ForegroundColor White
     Write-Host "  cleanup                  强制清理所有进程" -ForegroundColor White
     Write-Host "  init-notion              初始化 Notion 数据库结构" -ForegroundColor White
     Write-Host "  sync-to-notion [--data <范围>]  手动同步数据到 Notion" -ForegroundColor White
     Write-Host "  clean-notion-logs [选项] 清理 Notion 日志数据库" -ForegroundColor White
     Write-Host "  migrate-multiselect      将 youtube_channels 字段迁移为 multi_select" -ForegroundColor White
+    Write-Host "  ytdlp-watch [选项]       监控 yt-dlp 新版本并自动更新重启" -ForegroundColor White
     Write-Host "  add-chtopath             永久添加到系统 PATH" -ForegroundColor White
     Write-Host "  help                     显示此帮助信息" -ForegroundColor White
     Write-Host ""
@@ -51,14 +62,25 @@ function Show-Help {
     Write-Host ""
     Write-Host "启动选项:" -ForegroundColor Cyan
     Write-Host "  --mode, -m <模式>        指定配置模式 (local 或 notion)，优先于配置文件" -ForegroundColor Gray
+    Write-Host "  --run-mode, -r <模式>    指定运行模式 (auto / python)" -ForegroundColor Gray
+    Write-Host ""
+    Write-Host "ytdlp-watch 选项:" -ForegroundColor Cyan
+    Write-Host "  --interval <分钟>        检查间隔，默认 15 分钟" -ForegroundColor Gray
+    Write-Host "  --once                   只检查一次后退出" -ForegroundColor Gray
+    Write-Host "  --dry-run                仅检测，不执行升级和重启" -ForegroundColor Gray
     Write-Host ""
     Write-Host "示例:" -ForegroundColor Yellow
     Write-Host "  ch start                 # 启动服务（使用配置文件中的 mode）" -ForegroundColor Gray
     Write-Host "  ch start --mode notion   # 使用 Notion 模式启动（覆盖配置文件）" -ForegroundColor Gray
     Write-Host "  ch start -m notion       # 同上，使用短参数" -ForegroundColor Gray
+    Write-Host "  ch start -r python       # 强制使用 Python 源码启动" -ForegroundColor Gray
+    Write-Host "  ch restart -m notion -r python  # 用 Notion 模式重启并强制源码运行" -ForegroundColor Gray
     Write-Host "  ch stop                  # 停止服务" -ForegroundColor Gray
     Write-Host "  ch restart               # 重启服务" -ForegroundColor Gray
+    Write-Host "  ch ensure-running        # 仅在服务未运行时启动" -ForegroundColor Gray
     Write-Host "  ch status                # 查看状态" -ForegroundColor Gray
+    Write-Host "  ch install-autostart     # 安装开机自启和 15 分钟保活任务" -ForegroundColor Gray
+    Write-Host "  ch autostart-status      # 查看计划任务状态" -ForegroundColor Gray
     Write-Host "  ch logs                  # 查看所有日志" -ForegroundColor Gray
     Write-Host "  ch logs downloader -f    # 实时查看下载器日志" -ForegroundColor Gray
     Write-Host "  ch logs --list           # 列出所有日志文件" -ForegroundColor Gray
@@ -67,6 +89,8 @@ function Show-Help {
     Write-Host "  ch clean-notion-logs --days 30    # 预览删除 30 天前的日志" -ForegroundColor Gray
     Write-Host "  ch clean-notion-logs --days 30 --confirm  # 实际删除 30 天前的日志" -ForegroundColor Gray
     Write-Host "  ch migrate-multiselect   # 迁移 youtube_channels 字段为 multi_select" -ForegroundColor Gray
+    Write-Host "  ch ytdlp-watch -m notion # 监控新版本，检测到后自动升级并重启" -ForegroundColor Gray
+    Write-Host "  ch ytdlp-watch --once --dry-run # 只检测一次，不执行变更" -ForegroundColor Gray
     Write-Host "  ch cleanup               # 强制清理" -ForegroundColor Gray
     Write-Host "  ch add-chtopath          # 永久添加到系统 PATH" -ForegroundColor Gray
 }
@@ -141,6 +165,7 @@ function Add-ChToPath {
 $scriptPath = $MyInvocation.MyCommand.Path
 $scriptDir = Split-Path $scriptPath -Parent
 $projectRoot = Split-Path $scriptDir -Parent
+$hiddenAutostartScript = Join-Path $scriptDir "ch-autostart-hidden.vbs"
 
 # 检查虚拟环境或 uv
 $venvPath = Join-Path $projectRoot ".venv\Scripts\python.exe"
@@ -157,11 +182,10 @@ if (-not $useVenv -and -not (Get-Command uv -ErrorAction SilentlyContinue)) {
 # 切换到项目根目录
 Set-Location $projectRoot
 
-# 检查是否在正确的项目目录（检查标志性文件：源码或编译产物）
+# 检查是否在正确的项目目录（检查标志性文件：源码）
 $hasSrc = (Test-Path "src/yt_dlp_downloader.py") -and (Test-Path "src/telegram_bot.py")
-$hasExe = (Test-Path "dist/yt_dlp_downloader.exe") -and (Test-Path "dist/telegram_bot.exe")
-if (-not $hasSrc -and -not $hasExe) {
-    Write-Host "错误: 未找到项目文件（源码或编译产物），请确保脚本在正确的项目目录中" -ForegroundColor Red
+if (-not $hasSrc) {
+    Write-Host "错误: 未找到项目源码，请确保脚本在正确的项目目录中" -ForegroundColor Red
     Write-Host "当前目录: $(Get-Location)" -ForegroundColor Red
     exit 1
 }
@@ -169,6 +193,182 @@ if (-not $hasSrc -and -not $hasExe) {
 # 如果没有提供命令，默认执行start
 if (-not $Command) {
     $Command = "start"
+}
+
+function Invoke-ProjectPython {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Code
+    )
+
+    if ($useVenv) {
+        $pythonExe = Join-Path $projectRoot ".venv\Scripts\python.exe"
+        return & $pythonExe -c $Code
+    }
+
+    return uv run python -c $Code
+}
+
+function Invoke-ProjectYtDlpUpgrade {
+    if ($useVenv) {
+        $pythonExe = Join-Path $projectRoot ".venv\Scripts\python.exe"
+        return uv pip install --python $pythonExe -U --pre yt-dlp
+    }
+
+    return uv pip install -U --pre yt-dlp
+}
+
+function Get-YtDlpVersionInfo {
+    $pythonCode = @'
+import json
+import urllib.request
+
+result = {
+    "ok": False,
+    "installed": None,
+    "latest": None,
+    "update_available": False,
+    "error": None,
+}
+
+try:
+    from packaging.version import Version, InvalidVersion
+    import yt_dlp
+
+    installed = yt_dlp.version.__version__
+    result["installed"] = installed
+
+    with urllib.request.urlopen("https://pypi.org/pypi/yt-dlp/json", timeout=20) as resp:
+        data = json.load(resp)
+
+    versions = []
+    for raw, files in (data.get("releases") or {}).items():
+        if not files:
+            continue
+        try:
+            parsed = Version(raw)
+        except InvalidVersion:
+            continue
+        versions.append((parsed, raw))
+
+    if not versions:
+        raise RuntimeError("未从 PyPI 获取到可用版本列表")
+
+    versions.sort(key=lambda x: x[0])
+    latest = versions[-1][1]
+
+    result["latest"] = latest
+    result["update_available"] = Version(installed) < Version(latest)
+    result["ok"] = True
+except Exception as exc:
+    result["error"] = str(exc)
+
+print(json.dumps(result, ensure_ascii=False))
+'@
+
+    try {
+        $raw = Invoke-ProjectPython -Code $pythonCode 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            return [pscustomobject]@{
+                ok = $false
+                installed = $null
+                latest = $null
+                update_available = $false
+                error = ($raw -join "`n")
+            }
+        }
+
+        $lastLine = ($raw | Select-Object -Last 1)
+        return $lastLine | ConvertFrom-Json
+    }
+    catch {
+        return [pscustomobject]@{
+            ok = $false
+            installed = $null
+            latest = $null
+            update_available = $false
+            error = $_.Exception.Message
+        }
+    }
+}
+
+function Get-ServiceProcessSnapshot {
+    $processInfoPath = Join-Path $projectRoot "data/process_info.json"
+    $result = @{
+        process_info_path = $processInfoPath
+        info = $null
+        downloader_running = $false
+        bot_running = $false
+    }
+
+    if (-not (Test-Path $processInfoPath)) {
+        return [pscustomobject]$result
+    }
+
+    try {
+        $info = Get-Content $processInfoPath | ConvertFrom-Json
+        $result.info = $info
+        if ($info.downloader_pid) {
+            $result.downloader_running = [bool](Get-Process -Id $info.downloader_pid -ErrorAction SilentlyContinue)
+        }
+        if ($info.bot_pid) {
+            $result.bot_running = [bool](Get-Process -Id $info.bot_pid -ErrorAction SilentlyContinue)
+        }
+    }
+    catch {
+        return [pscustomobject]$result
+    }
+
+    return [pscustomobject]$result
+}
+
+function Test-ServiceHealthy {
+    $snapshot = Get-ServiceProcessSnapshot
+    return ($snapshot.downloader_running -and $snapshot.bot_running)
+}
+
+function Ensure-HiddenAutostartScript {
+    $pwshExe = (Get-Command pwsh.exe -ErrorAction SilentlyContinue).Source
+    if (-not $pwshExe) {
+        $pwshExe = (Get-Command powershell.exe -ErrorAction SilentlyContinue).Source
+    }
+    if (-not $pwshExe) {
+        $pwshExe = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
+    }
+
+    $escapedPwsh = $pwshExe.Replace("""", """""")
+    $escapedScript = $PSCommandPath.Replace("""", """""")
+    $commandLine = """" + $escapedPwsh + """ -NoProfile -ExecutionPolicy Bypass -File """ + $escapedScript + """ ensure-running -r python"
+
+    $vbsContent = @"
+Set shell = CreateObject("WScript.Shell")
+shell.Run "$commandLine", 0, False
+"@
+
+    Set-Content -Path $hiddenAutostartScript -Value $vbsContent -Encoding ASCII
+    return $hiddenAutostartScript
+}
+
+function Get-AutostartTaskDefinitions {
+    $wscriptExe = Join-Path $env:SystemRoot "System32\wscript.exe"
+    $hiddenScriptPath = Ensure-HiddenAutostartScript
+    $taskCommand = "`"$wscriptExe`" //B //NoLogo `"$hiddenScriptPath`""
+    return @(
+        @{
+            Name = "ChronoLullaby-Autostart"
+            Schedule = "ONLOGON"
+            Modifier = $null
+            Description = "ChronoLullaby 开机/登录自启"
+            Command = $taskCommand
+        },
+        @{
+            Name = "ChronoLullaby-KeepAlive"
+            Schedule = "MINUTE"
+            Modifier = 15
+            Description = "ChronoLullaby 每 15 分钟保活检查"
+            Command = $taskCommand
+        }
+    )
 }
 
 # 启动命令实现
@@ -179,6 +379,15 @@ function Invoke-StartCommand {
     if ($Mode) {
         $env:CONFIG_MODE = $Mode
         Write-Host "配置模式: $Mode (命令行指定，覆盖配置文件)" -ForegroundColor Cyan
+    }
+
+    $normalizedRunMode = ""
+    if ($RunMode) {
+        $normalizedRunMode = $RunMode.ToLowerInvariant()
+        if ($normalizedRunMode -notin @("auto", "python")) {
+            Write-Host "错误: --run-mode 只支持 auto / python" -ForegroundColor Red
+            return
+        }
     }
     else {
         Write-Host "配置模式: 使用配置文件中的 mode 设置" -ForegroundColor Gray
@@ -191,37 +400,26 @@ function Invoke-StartCommand {
             $existingInfo = Get-Content $processInfoPath | ConvertFrom-Json
 
             # 检查进程是否还在运行
+            $launcherRunning = $null
+            if ($existingInfo.launcher_pid) {
+                $launcherRunning = Get-Process -Id $existingInfo.launcher_pid -ErrorAction SilentlyContinue
+            }
             $downloaderRunning = Get-Process -Id $existingInfo.downloader_pid -ErrorAction SilentlyContinue
             $botRunning = Get-Process -Id $existingInfo.bot_pid -ErrorAction SilentlyContinue
 
-            if ($downloaderRunning -or $botRunning) {
+            if ($launcherRunning -or $downloaderRunning -or $botRunning) {
                 Write-Host "⚠️  检测到已有实例在运行：" -ForegroundColor Yellow
+                if ($launcherRunning) { Write-Host "  Launcher 监护进程 (PID: $($existingInfo.launcher_pid))" -ForegroundColor Gray }
                 if ($downloaderRunning) { Write-Host "  YouTube 下载器 (PID: $($existingInfo.downloader_pid))" -ForegroundColor Gray }
                 if ($botRunning) { Write-Host "  Telegram 机器人 (PID: $($existingInfo.bot_pid))" -ForegroundColor Gray }
                 Write-Host ""
-                Write-Host "请选择操作：" -ForegroundColor Yellow
-                Write-Host "  1. 停止现有实例并重新启动 (推荐)" -ForegroundColor White
-                Write-Host "  2. 继续启动 (可能导致冲突)" -ForegroundColor Red
-                Write-Host "  3. 取消启动" -ForegroundColor White
-
-                $choice = Read-Host "请输入选择 (1-3)"
-
-                switch ($choice) {
-                    "1" {
-                        Write-Host "正在停止现有实例..." -ForegroundColor Cyan
-                        if ($downloaderRunning) { Stop-Process -Id $existingInfo.downloader_pid -Force -ErrorAction SilentlyContinue }
-                        if ($botRunning) { Stop-Process -Id $existingInfo.bot_pid -Force -ErrorAction SilentlyContinue }
-                        Start-Sleep 2
-                        Write-Host "现有实例已停止，即将重新启动..." -ForegroundColor Green
-                    }
-                    "3" {
-                        Write-Host "启动已取消" -ForegroundColor Yellow
-                        return
-                    }
-                    default {
-                        Write-Host "继续启动，但可能会遇到冲突问题..." -ForegroundColor Red
-                    }
-                }
+                Write-Host "检测到已有实例，默认先停止旧实例再启动，避免重复进程冲突。" -ForegroundColor Yellow
+                Write-Host "正在停止现有实例..." -ForegroundColor Cyan
+                if ($launcherRunning) { Stop-Process -Id $existingInfo.launcher_pid -Force -ErrorAction SilentlyContinue }
+                if ($downloaderRunning) { Stop-Process -Id $existingInfo.downloader_pid -Force -ErrorAction SilentlyContinue }
+                if ($botRunning) { Stop-Process -Id $existingInfo.bot_pid -Force -ErrorAction SilentlyContinue }
+                Start-Sleep 2
+                Write-Host "现有实例已停止，即将重新启动..." -ForegroundColor Green
             }
             else {
                 # 进程已不存在，删除过期的信息文件
@@ -233,16 +431,10 @@ function Invoke-StartCommand {
         }
     }
 
-    # 检测是否有编译好的 exe 文件
-    $downloaderExe = Join-Path $projectRoot "dist\yt_dlp_downloader.exe"
-    $botExe = Join-Path $projectRoot "dist\telegram_bot.exe"
-    $useExe = (Test-Path $downloaderExe) -and (Test-Path $botExe)
-
-    # exe 模式：exe 通过 sys.executable 定位项目根（dist/ 的父目录），无需进入 src/
-    # Python 模式：需要进入 src/ 目录以便正确导入模块
-    if (-not $useExe) {
-        Push-Location src
+    if ($normalizedRunMode -eq "python") {
+        Write-Host "已指定 --run-mode python，强制使用 Python 启动模式" -ForegroundColor Yellow
     }
+    Push-Location src
 
     try {
         # 创建日志目录（使用绝对路径）
@@ -251,61 +443,39 @@ function Invoke-StartCommand {
             New-Item -ItemType Directory -Path $logDir -Force | Out-Null
         }
 
-        if ($useExe) {
-            Write-Host "检测到编译版本，使用 exe 启动" -ForegroundColor Green
-        }
-        else {
-            Write-Host "未检测到编译版本，使用 Python 启动" -ForegroundColor Gray
-        }
+        Write-Host "使用 Python 启动" -ForegroundColor Gray
 
-        Write-Host "后台启动 YouTube 下载器..." -ForegroundColor Cyan
         Write-Host "日志目录: $logDir" -ForegroundColor Gray
         Write-Host "日志文件由程序自动管理 (logs/downloader.log, logs/bot.log 等)" -ForegroundColor Gray
-        
-        if ($useExe) {
-            $downloaderProcess = Start-Process -FilePath $downloaderExe -WorkingDirectory $projectRoot -WindowStyle Hidden -PassThru
-        }
-        elseif ($useVenv) {
+
+        if ($useVenv) {
             $pythonExe = Join-Path $projectRoot ".venv\Scripts\python.exe"
-            $downloaderProcess = Start-Process -FilePath $pythonExe -ArgumentList "yt_dlp_downloader.py" -WindowStyle Hidden -PassThru
+            Write-Host "后台启动 Launcher 监护进程..." -ForegroundColor Cyan
+            $launcherProcess = Start-Process -FilePath $pythonExe -ArgumentList "launcher.py" -WindowStyle Hidden -PassThru
         }
         else {
-            $downloaderProcess = Start-Process -FilePath "uv" -ArgumentList "run", "python", "yt_dlp_downloader.py" -WindowStyle Hidden -PassThru
-        }
-
-        Start-Sleep 2
-
-        Write-Host "后台启动 Telegram 机器人..." -ForegroundColor Cyan
-        
-        if ($useExe) {
-            $botProcess = Start-Process -FilePath $botExe -WorkingDirectory $projectRoot -WindowStyle Hidden -PassThru
-        }
-        elseif ($useVenv) {
-            $pythonExe = Join-Path $projectRoot ".venv\Scripts\python.exe"
-            $botProcess = Start-Process -FilePath $pythonExe -ArgumentList "telegram_bot.py" -WindowStyle Hidden -PassThru
-        }
-        else {
-            $botProcess = Start-Process -FilePath "uv" -ArgumentList "run", "python", "telegram_bot.py" -WindowStyle Hidden -PassThru
+            Write-Host "后台启动 Launcher 监护进程..." -ForegroundColor Cyan
+            $launcherProcess = Start-Process -FilePath "uv" -ArgumentList "run", "python", "launcher.py" -WindowStyle Hidden -PassThru
         }
 
         # 创建进程信息文件（使用绝对路径）
         $processInfoPath = Join-Path $projectRoot "data/process_info.json"
-        $processInfo = @{
-            "downloader_pid" = $downloaderProcess.Id
-            "bot_pid"        = $botProcess.Id
-            "start_time"     = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-            "project_root"   = $projectRoot
-            "log_dir"        = $logDir
-            "launch_mode"    = if ($useExe) { "exe" } else { "python" }
+        Start-Sleep -Seconds 3
+        if (-not (Test-Path $processInfoPath)) {
+            $processInfo = @{
+                "launcher_pid" = $launcherProcess.Id
+                "start_time"   = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+                "project_root" = $projectRoot
+                "log_dir"      = $logDir
+                "launch_mode"  = "python-launcher"
+            }
+            $processInfo | ConvertTo-Json | Out-File -FilePath $processInfoPath -Encoding UTF8
         }
-
-        $processInfo | ConvertTo-Json | Out-File -FilePath $processInfoPath -Encoding UTF8
 
         Write-Host ""
         Write-Host "=== 服务启动完成 ===" -ForegroundColor Green
-        Write-Host "启动模式: $(if ($useExe) { 'exe (编译版)' } else { 'python (解释器)' })" -ForegroundColor White
-        Write-Host "YouTube 下载器 PID: $($downloaderProcess.Id)" -ForegroundColor White
-        Write-Host "Telegram 机器人 PID: $($botProcess.Id)" -ForegroundColor White
+        Write-Host "启动模式: python + launcher 监护" -ForegroundColor White
+        Write-Host "Launcher PID: $($launcherProcess.Id)" -ForegroundColor White
         Write-Host "进程信息已保存到: $processInfoPath" -ForegroundColor White
         Write-Host ""
         Write-Host "使用 'ch status' 查看状态，'ch logs' 查看日志，'ch stop' 停止服务" -ForegroundColor Yellow
@@ -373,6 +543,26 @@ function Invoke-StopCommand {
 
             if (-not $Silent) {
                 Write-Host "从进程信息文件中读取 PID..." -ForegroundColor Cyan
+            }
+
+            if ($processInfo.launcher_pid) {
+                try {
+                    $launcherProcess = Get-Process -Id $processInfo.launcher_pid -ErrorAction SilentlyContinue
+                    if ($launcherProcess) {
+                        Stop-Process -Id $processInfo.launcher_pid -Force
+                        if (-not $Silent) {
+                            Write-Host "Launcher 监护进程 (PID: $($processInfo.launcher_pid)) 已停止" -ForegroundColor Green
+                        }
+                    }
+                    elseif (-not $Silent) {
+                        Write-Host "Launcher 监护进程已不存在" -ForegroundColor Yellow
+                    }
+                }
+                catch {
+                    if (-not $Silent) {
+                        Write-Host "停止 Launcher 时出错: $($_.Exception.Message)" -ForegroundColor Red
+                    }
+                }
             }
 
             # 停止下载器进程
@@ -479,6 +669,176 @@ function Invoke-RestartCommand {
     Write-Host "使用 'ch status' 检查服务状态" -ForegroundColor Yellow
 }
 
+function Invoke-EnsureRunningCommand {
+    Write-Host "=== ChronoLullaby 保活检查 ===" -ForegroundColor Green
+
+    if (Test-ServiceHealthy) {
+        $snapshot = Get-ServiceProcessSnapshot
+        Write-Host "服务已在运行，跳过启动" -ForegroundColor Green
+        Write-Host "  下载器 PID: $($snapshot.info.downloader_pid)" -ForegroundColor Gray
+        Write-Host "  Bot PID: $($snapshot.info.bot_pid)" -ForegroundColor Gray
+        return
+    }
+
+    Write-Host "检测到服务未完全运行，开始拉起..." -ForegroundColor Yellow
+    Invoke-StartCommand
+}
+
+function Invoke-InstallAutostartCommand {
+    Write-Host "=== 安装开机自启与保活任务 ===" -ForegroundColor Green
+
+    foreach ($task in Get-AutostartTaskDefinitions) {
+        $args = @(
+            "/Create",
+            "/F",
+            "/TN", $task.Name,
+            "/SC", $task.Schedule,
+            "/TR", $task.Command
+        )
+
+        if ($task.Modifier) {
+            $args += @("/MO", "$($task.Modifier)")
+        }
+
+        & schtasks.exe @args | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "❌ 安装计划任务失败: $($task.Name)" -ForegroundColor Red
+            return
+        }
+
+        Write-Host "✅ 已安装: $($task.Name)" -ForegroundColor Green
+        Write-Host "  说明: $($task.Description)" -ForegroundColor Gray
+    }
+
+    Write-Host ""
+    Write-Host "计划任务已安装完成。" -ForegroundColor Green
+    Write-Host "它们会调用: ch ensure-running -r python" -ForegroundColor Gray
+}
+
+function Invoke-UninstallAutostartCommand {
+    Write-Host "=== 删除开机自启与保活任务 ===" -ForegroundColor Green
+
+    foreach ($task in Get-AutostartTaskDefinitions) {
+        & schtasks.exe /Delete /F /TN $task.Name | Out-Null
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "✅ 已删除: $($task.Name)" -ForegroundColor Green
+        }
+        else {
+            Write-Host "ℹ️ 未找到任务: $($task.Name)" -ForegroundColor Gray
+        }
+    }
+}
+
+function Invoke-AutostartStatusCommand {
+    Write-Host "=== 计划任务状态 ===" -ForegroundColor Green
+
+    foreach ($task in Get-AutostartTaskDefinitions) {
+        $queryOutput = & schtasks.exe /Query /TN $task.Name /FO LIST /V 2>$null
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "✅ $($task.Name)" -ForegroundColor Green
+            $queryOutput | Select-String "状态:|Status:|上次运行时间:|Last Run Time:|下次运行时间:|Next Run Time:|任务计划:|Schedule:" | ForEach-Object {
+                Write-Host "  $($_.ToString().Trim())" -ForegroundColor Gray
+            }
+        }
+        else {
+            Write-Host "❌ $($task.Name) 未安装" -ForegroundColor Red
+        }
+        Write-Host ""
+    }
+}
+
+function Invoke-YtDlpWatchCommand {
+    $intervalMinutes = 15
+    $once = $false
+    $dryRun = $false
+
+    for ($i = 0; $i -lt $Arguments.Count; $i++) {
+        switch ($Arguments[$i]) {
+            "--interval" {
+                if ($i + 1 -lt $Arguments.Count) {
+                    $intervalMinutes = [int]$Arguments[$i + 1]
+                    $i++
+                }
+            }
+            "-interval" {
+                if ($i + 1 -lt $Arguments.Count) {
+                    $intervalMinutes = [int]$Arguments[$i + 1]
+                    $i++
+                }
+            }
+            "--once" { $once = $true }
+            "--dry-run" { $dryRun = $true }
+        }
+    }
+
+    if ($intervalMinutes -lt 1) {
+        $intervalMinutes = 1
+    }
+
+    if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
+        Write-Host "❌ ytdlp-watch 需要 uv 命令来执行升级" -ForegroundColor Red
+        return
+    }
+
+    Write-Host "=== yt-dlp 自动监控与恢复 ===" -ForegroundColor Green
+    Write-Host "检查间隔: $intervalMinutes 分钟" -ForegroundColor White
+    Write-Host "模式: $(if ($Mode) { $Mode } else { '使用配置文件默认 mode' })" -ForegroundColor Gray
+    if ($dryRun) {
+        Write-Host "当前为 dry-run：只检测，不执行升级/重启" -ForegroundColor Yellow
+    }
+    Write-Host ""
+
+    while ($true) {
+        $now = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+        Write-Host "[$now] 正在检查 yt-dlp 版本..." -ForegroundColor Cyan
+
+        $info = Get-YtDlpVersionInfo
+        if (-not $info.ok) {
+            Write-Host "❌ 版本检查失败: $($info.error)" -ForegroundColor Red
+        }
+        else {
+            Write-Host "  当前版本: $($info.installed)" -ForegroundColor White
+            Write-Host "  最新版本: $($info.latest)" -ForegroundColor White
+
+            if ($info.update_available) {
+                Write-Host "✅ 检测到新版本，准备执行自动恢复流程" -ForegroundColor Green
+
+                if ($dryRun) {
+                    Write-Host "dry-run：跳过升级与重启" -ForegroundColor Yellow
+                }
+                else {
+                    Write-Host "📦 执行项目环境升级: yt-dlp" -ForegroundColor Cyan
+                    Invoke-ProjectYtDlpUpgrade
+                    if ($LASTEXITCODE -ne 0) {
+                        Write-Host "❌ yt-dlp 升级失败，本轮结束后继续监控" -ForegroundColor Red
+                    }
+                    else {
+                        $verifyVersion = (Invoke-ProjectPython -Code "import yt_dlp; print(yt_dlp.version.__version__)") | Select-Object -Last 1
+                        Write-Host "✅ 项目环境当前 yt-dlp 版本: $verifyVersion" -ForegroundColor Green
+
+                        Write-Host "✅ yt-dlp 升级成功，开始重启服务..." -ForegroundColor Green
+                        Invoke-RestartCommand
+                        Write-Host "🎯 自动恢复完成，退出监控" -ForegroundColor Green
+                        return
+                    }
+                }
+            }
+            else {
+                Write-Host "ℹ️ 暂无新版本" -ForegroundColor Gray
+            }
+        }
+
+        if ($once) {
+            Write-Host "单次检查完成，退出" -ForegroundColor Gray
+            return
+        }
+
+        Write-Host "下次检查将在 $intervalMinutes 分钟后进行..." -ForegroundColor Gray
+        Write-Host ""
+        Start-Sleep -Seconds ($intervalMinutes * 60)
+    }
+}
+
 # 状态命令实现
 function Invoke-StatusCommand {
     Write-Host "=== ChronoLullaby 状态检查 ===" -ForegroundColor Green
@@ -525,17 +885,37 @@ function Invoke-StatusCommand {
             Write-Host "项目目录: $($processInfo.project_root)" -ForegroundColor Gray
             Write-Host "启动时间: $($processInfo.start_time)" -ForegroundColor White
             $launchMode = if ($processInfo.launch_mode) { $processInfo.launch_mode } else { "python" }
-            Write-Host "启动模式: $(if ($launchMode -eq 'exe') { 'exe (编译版)' } else { 'python (解释器)' })" -ForegroundColor White
+            $launchModeLabel = switch ($launchMode) {
+                "python-launcher" { "python + launcher 监护" }
+                default { "python (解释器)" }
+            }
+            Write-Host "启动模式: $launchModeLabel" -ForegroundColor White
             Write-Host "日志目录: $($processInfo.log_dir)" -ForegroundColor Gray
             Write-Host "使用 'ch logs' 查看日志" -ForegroundColor Gray
             Write-Host ""
 
+            $launcherRunning = $false
+            if ($processInfo.launcher_pid) {
+                $launcherRunning = Check-ProcessStatus -ProcessId $processInfo.launcher_pid -ProcessName "Launcher 监护进程"
+                Write-Host ""
+            }
             $downloaderRunning = Check-ProcessStatus -ProcessId $processInfo.downloader_pid -ProcessName "YouTube 下载器"
             Write-Host ""
             $botRunning = Check-ProcessStatus -ProcessId $processInfo.bot_pid -ProcessName "Telegram 机器人"
             Write-Host ""
 
-            if ($downloaderRunning -and $botRunning) {
+            if ($launchMode -eq "python-launcher") {
+                if ($launcherRunning -and $downloaderRunning -and $botRunning) {
+                    Write-Host "✅ 所有服务运行正常" -ForegroundColor Green
+                }
+                elseif ($launcherRunning -or $downloaderRunning -or $botRunning) {
+                    Write-Host "⚠️  部分服务运行异常" -ForegroundColor Yellow
+                }
+                else {
+                    Write-Host "❌ 所有服务都未运行" -ForegroundColor Red
+                }
+            }
+            elseif ($downloaderRunning -and $botRunning) {
                 Write-Host "✅ 所有服务运行正常" -ForegroundColor Green
             }
             elseif ($downloaderRunning -or $botRunning) {
@@ -558,6 +938,7 @@ function Invoke-StatusCommand {
         $allProcesses = @()
         $allProcesses += Get-Process -Name "uv*" -ErrorAction SilentlyContinue
         $allProcesses += Get-Process -Name "python*" -ErrorAction SilentlyContinue
+        $allProcesses += Get-Process -Name "launcher" -ErrorAction SilentlyContinue
         $allProcesses += Get-Process -Name "yt_dlp_downloader" -ErrorAction SilentlyContinue
         $allProcesses += Get-Process -Name "telegram_bot" -ErrorAction SilentlyContinue
         $foundProcesses = $false
@@ -566,7 +947,14 @@ function Invoke-StatusCommand {
             try {
                 $processName = $process.ProcessName
                 $commandLine = $process.CommandLine
-                if ($processName -eq "yt_dlp_downloader" -or $commandLine -like "*yt_dlp_downloader.py*") {
+                if ($processName -eq "launcher" -or $commandLine -like "*launcher.py*") {
+                    Write-Host "找到 Launcher 监护进程:" -ForegroundColor Green
+                    Write-Host "  进程名: $processName" -ForegroundColor White
+                    Write-Host "  PID: $($process.Id)" -ForegroundColor White
+                    Write-Host "  内存: $([math]::Round($process.WorkingSet64/1MB, 2))MB" -ForegroundColor White
+                    $foundProcesses = $true
+                }
+                elseif ($processName -eq "yt_dlp_downloader" -or $commandLine -like "*yt_dlp_downloader.py*") {
                     Write-Host "找到 YouTube 下载器进程:" -ForegroundColor Green
                     Write-Host "  进程名: $processName" -ForegroundColor White
                     Write-Host "  PID: $($process.Id)" -ForegroundColor White
@@ -1084,7 +1472,7 @@ function Invoke-CleanupCommand {
 # 辅助函数
 function Get-AllRelatedProcesses {
     param (
-        [string[]]$Keywords = @("yt_dlp_downloader.py", "telegram_bot.py", "chronolullaby")
+        [string[]]$Keywords = @("launcher.py", "yt_dlp_downloader.py", "telegram_bot.py", "chronolullaby")
     )
 
     $allProcesses = @()
@@ -1136,12 +1524,6 @@ function Get-AllRelatedProcesses {
         return $false
     }
     $allProcesses += $cmdProcesses
-
-    # 查找编译版 exe 进程（yt_dlp_downloader.exe / telegram_bot.exe）
-    $exeProcesses = @()
-    $exeProcesses += Get-Process -Name "yt_dlp_downloader" -ErrorAction SilentlyContinue
-    $exeProcesses += Get-Process -Name "telegram_bot" -ErrorAction SilentlyContinue
-    $allProcesses += $exeProcesses
 
     return $allProcesses
 }
@@ -1223,8 +1605,20 @@ switch ($Command.ToLower()) {
     "restart" {
         Invoke-RestartCommand
     }
+    "ensure-running" {
+        Invoke-EnsureRunningCommand
+    }
     "status" {
         Invoke-StatusCommand
+    }
+    "install-autostart" {
+        Invoke-InstallAutostartCommand
+    }
+    "uninstall-autostart" {
+        Invoke-UninstallAutostartCommand
+    }
+    "autostart-status" {
+        Invoke-AutostartStatusCommand
     }
     "logs" {
         Invoke-LogsCommand
@@ -1240,6 +1634,9 @@ switch ($Command.ToLower()) {
     }
     "migrate-multiselect" {
         Invoke-MigrateMultiselectCommand
+    }
+    "ytdlp-watch" {
+        Invoke-YtDlpWatchCommand
     }
     "upgrade-notion-schema" {
         Invoke-UpgradeNotionSchemaCommand
