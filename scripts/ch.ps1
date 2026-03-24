@@ -297,6 +297,10 @@ function Get-ServiceProcessSnapshot {
     $result = @{
         process_info_path = $processInfoPath
         info = $null
+        effective_launcher_pid = $null
+        effective_downloader_pid = $null
+        effective_bot_pid = $null
+        launcher_running = $false
         downloader_running = $false
         bot_running = $false
     }
@@ -308,11 +312,17 @@ function Get-ServiceProcessSnapshot {
     try {
         $info = Get-Content $processInfoPath | ConvertFrom-Json
         $result.info = $info
+        if ($info.launcher_pid) {
+            $result.effective_launcher_pid = Get-EffectiveTrackedPid -RootPid $info.launcher_pid -Pattern "launcher.py"
+            $result.launcher_running = [bool](Get-Process -Id $result.effective_launcher_pid -ErrorAction SilentlyContinue)
+        }
         if ($info.downloader_pid) {
-            $result.downloader_running = [bool](Get-Process -Id $info.downloader_pid -ErrorAction SilentlyContinue)
+            $result.effective_downloader_pid = Get-EffectiveTrackedPid -RootPid $info.downloader_pid -Pattern "yt_dlp_downloader.py"
+            $result.downloader_running = [bool](Get-Process -Id $result.effective_downloader_pid -ErrorAction SilentlyContinue)
         }
         if ($info.bot_pid) {
-            $result.bot_running = [bool](Get-Process -Id $info.bot_pid -ErrorAction SilentlyContinue)
+            $result.effective_bot_pid = Get-EffectiveTrackedPid -RootPid $info.bot_pid -Pattern "telegram_bot.py"
+            $result.bot_running = [bool](Get-Process -Id $result.effective_bot_pid -ErrorAction SilentlyContinue)
         }
     }
     catch {
@@ -325,6 +335,50 @@ function Get-ServiceProcessSnapshot {
 function Test-ServiceHealthy {
     $snapshot = Get-ServiceProcessSnapshot
     return ($snapshot.downloader_running -and $snapshot.bot_running)
+}
+
+function Get-TrackedPythonProcesses {
+    try {
+        return @(Get-CimInstance Win32_Process | Where-Object {
+            $_.Name -eq "python.exe" -and (
+                $_.CommandLine -like "*launcher.py*" -or
+                $_.CommandLine -like "*yt_dlp_downloader.py*" -or
+                $_.CommandLine -like "*telegram_bot.py*"
+            )
+        })
+    }
+    catch {
+        return @()
+    }
+}
+
+function Get-EffectiveTrackedPid {
+    param(
+        [int]$RootPid,
+        [string]$Pattern
+    )
+
+    if (-not $RootPid) {
+        return $null
+    }
+
+    $currentPid = $RootPid
+    $allTracked = Get-TrackedPythonProcesses
+    if (-not $allTracked -or $allTracked.Count -eq 0) {
+        return $currentPid
+    }
+
+    while ($true) {
+        $matchingChildren = @($allTracked | Where-Object {
+            $_.ParentProcessId -eq $currentPid -and $_.CommandLine -like "*$Pattern*"
+        })
+
+        if ($matchingChildren.Count -ne 1) {
+            return $currentPid
+        }
+
+        $currentPid = $matchingChildren[0].ProcessId
+    }
 }
 
 function Ensure-HiddenAutostartScript {
@@ -540,12 +594,72 @@ function Invoke-StopCommand {
     if (Test-Path $processInfoPath) {
         try {
             $processInfo = Get-Content $processInfoPath | ConvertFrom-Json
+            $snapshot = Get-ServiceProcessSnapshot
 
             if (-not $Silent) {
                 Write-Host "从进程信息文件中读取 PID..." -ForegroundColor Cyan
             }
 
-            if ($processInfo.launcher_pid) {
+            $trackedTargets = @(
+                @{ Name = "Launcher 监护进程"; RecordedPid = $processInfo.launcher_pid; EffectivePid = $snapshot.effective_launcher_pid },
+                @{ Name = "YouTube 下载器"; RecordedPid = $processInfo.downloader_pid; EffectivePid = $snapshot.effective_downloader_pid },
+                @{ Name = "Telegram 机器人"; RecordedPid = $processInfo.bot_pid; EffectivePid = $snapshot.effective_bot_pid }
+            )
+            $stoppedPids = New-Object System.Collections.Generic.HashSet[int]
+
+            foreach ($target in $trackedTargets) {
+                if (-not $target.RecordedPid) {
+                    continue
+                }
+
+                $pidCandidates = @()
+                if ($target.EffectivePid) {
+                    $pidCandidates += [int]$target.EffectivePid
+                }
+                if ($target.RecordedPid) {
+                    $pidCandidates += [int]$target.RecordedPid
+                }
+
+                foreach ($pid in ($pidCandidates | Select-Object -Unique)) {
+                    if (-not $stoppedPids.Add($pid)) {
+                        continue
+                    }
+                    try {
+                        $process = Get-Process -Id $pid -ErrorAction SilentlyContinue
+                        if ($process) {
+                            Stop-Process -Id $pid -Force
+                            if (-not $Silent) {
+                                if ($pid -eq $target.RecordedPid -or -not $target.EffectivePid) {
+                                    Write-Host "$($target.Name) (PID: $pid) 已停止" -ForegroundColor Green
+                                }
+                                else {
+                                    Write-Host "$($target.Name) 实际工作进程 (PID: $pid) 已停止" -ForegroundColor Green
+                                }
+                            }
+                        }
+                        elseif (-not $Silent) {
+                            Write-Host "$($target.Name) 进程已不存在 (PID: $pid)" -ForegroundColor Yellow
+                        }
+                    }
+                    catch {
+                        if (-not $Silent) {
+                            Write-Host "停止 $($target.Name) (PID: $pid) 时出错: $($_.Exception.Message)" -ForegroundColor Red
+                        }
+                    }
+                }
+            }
+
+            if (-not $Silent -and $processInfo.launcher_pid -and $snapshot.effective_launcher_pid -and $snapshot.effective_launcher_pid -ne $processInfo.launcher_pid) {
+                Write-Host "Launcher 记录PID: $($processInfo.launcher_pid) -> 实际工作PID: $($snapshot.effective_launcher_pid)" -ForegroundColor Gray
+            }
+            if (-not $Silent -and $processInfo.downloader_pid -and $snapshot.effective_downloader_pid -and $snapshot.effective_downloader_pid -ne $processInfo.downloader_pid) {
+                Write-Host "下载器 记录PID: $($processInfo.downloader_pid) -> 实际工作PID: $($snapshot.effective_downloader_pid)" -ForegroundColor Gray
+            }
+            if (-not $Silent -and $processInfo.bot_pid -and $snapshot.effective_bot_pid -and $snapshot.effective_bot_pid -ne $processInfo.bot_pid) {
+                Write-Host "Bot 记录PID: $($processInfo.bot_pid) -> 实际工作PID: $($snapshot.effective_bot_pid)" -ForegroundColor Gray
+            }
+
+            if ($processInfo.launcher_pid -and -not $snapshot.effective_launcher_pid) {
                 try {
                     $launcherProcess = Get-Process -Id $processInfo.launcher_pid -ErrorAction SilentlyContinue
                     if ($launcherProcess) {
@@ -566,7 +680,7 @@ function Invoke-StopCommand {
             }
 
             # 停止下载器进程
-            if ($processInfo.downloader_pid) {
+            if ($processInfo.downloader_pid -and -not $snapshot.effective_downloader_pid) {
                 try {
                     $process = Get-Process -Id $processInfo.downloader_pid -ErrorAction SilentlyContinue
                     if ($process) {
@@ -589,7 +703,7 @@ function Invoke-StopCommand {
             }
 
             # 停止机器人进程
-            if ($processInfo.bot_pid) {
+            if ($processInfo.bot_pid -and -not $snapshot.effective_bot_pid) {
                 try {
                     $process = Get-Process -Id $processInfo.bot_pid -ErrorAction SilentlyContinue
                     if ($process) {
@@ -675,8 +789,10 @@ function Invoke-EnsureRunningCommand {
     if (Test-ServiceHealthy) {
         $snapshot = Get-ServiceProcessSnapshot
         Write-Host "服务已在运行，跳过启动" -ForegroundColor Green
-        Write-Host "  下载器 PID: $($snapshot.info.downloader_pid)" -ForegroundColor Gray
-        Write-Host "  Bot PID: $($snapshot.info.bot_pid)" -ForegroundColor Gray
+        $downloaderPid = if ($snapshot.effective_downloader_pid) { $snapshot.effective_downloader_pid } else { $snapshot.info.downloader_pid }
+        $botPid = if ($snapshot.effective_bot_pid) { $snapshot.effective_bot_pid } else { $snapshot.info.bot_pid }
+        Write-Host "  下载器 PID: $downloaderPid" -ForegroundColor Gray
+        Write-Host "  Bot PID: $botPid" -ForegroundColor Gray
         return
     }
 
@@ -850,6 +966,12 @@ function Invoke-StatusCommand {
             [string]$ProcessName
         )
 
+        if ($ProcessId -le 0) {
+            Write-Host "$ProcessName" -ForegroundColor Yellow
+            Write-Host "  状态: PID 尚未写入或进程尚未拉起" -ForegroundColor Yellow
+            return $false
+        }
+
         try {
             $process = Get-Process -Id $ProcessId -ErrorAction SilentlyContinue
             if ($process) {
@@ -880,6 +1002,7 @@ function Invoke-StatusCommand {
     if (Test-Path $processInfoPath) {
         try {
             $processInfo = Get-Content $processInfoPath | ConvertFrom-Json
+            $snapshot = Get-ServiceProcessSnapshot
 
             Write-Host "从进程信息文件读取状态:" -ForegroundColor Cyan
             Write-Host "项目目录: $($processInfo.project_root)" -ForegroundColor Gray
@@ -896,12 +1019,24 @@ function Invoke-StatusCommand {
 
             $launcherRunning = $false
             if ($processInfo.launcher_pid) {
-                $launcherRunning = Check-ProcessStatus -ProcessId $processInfo.launcher_pid -ProcessName "Launcher 监护进程"
+                $launcherPidToCheck = if ($snapshot.effective_launcher_pid) { $snapshot.effective_launcher_pid } else { $processInfo.launcher_pid }
+                $launcherRunning = Check-ProcessStatus -ProcessId $launcherPidToCheck -ProcessName "Launcher 监护进程"
+                if ($launcherPidToCheck -ne $processInfo.launcher_pid) {
+                    Write-Host "  记录PID: $($processInfo.launcher_pid) -> 实际工作PID: $launcherPidToCheck" -ForegroundColor Gray
+                }
                 Write-Host ""
             }
-            $downloaderRunning = Check-ProcessStatus -ProcessId $processInfo.downloader_pid -ProcessName "YouTube 下载器"
+            $downloaderPidToCheck = if ($snapshot.effective_downloader_pid) { $snapshot.effective_downloader_pid } else { $processInfo.downloader_pid }
+            $downloaderRunning = Check-ProcessStatus -ProcessId $downloaderPidToCheck -ProcessName "YouTube 下载器"
+            if ($downloaderPidToCheck -and $downloaderPidToCheck -ne $processInfo.downloader_pid) {
+                Write-Host "  记录PID: $($processInfo.downloader_pid) -> 实际工作PID: $downloaderPidToCheck" -ForegroundColor Gray
+            }
             Write-Host ""
-            $botRunning = Check-ProcessStatus -ProcessId $processInfo.bot_pid -ProcessName "Telegram 机器人"
+            $botPidToCheck = if ($snapshot.effective_bot_pid) { $snapshot.effective_bot_pid } else { $processInfo.bot_pid }
+            $botRunning = Check-ProcessStatus -ProcessId $botPidToCheck -ProcessName "Telegram 机器人"
+            if ($botPidToCheck -and $botPidToCheck -ne $processInfo.bot_pid) {
+                Write-Host "  记录PID: $($processInfo.bot_pid) -> 实际工作PID: $botPidToCheck" -ForegroundColor Gray
+            }
             Write-Host ""
 
             if ($launchMode -eq "python-launcher") {
