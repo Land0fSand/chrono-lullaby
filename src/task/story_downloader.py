@@ -17,8 +17,14 @@ from config import (
     get_video_delay_min,
 )
 from logger import TRACE_LEVEL, get_logger, log_with_context
-from task.download_state import check_cookies, record_download_entry
+from task.download_state import check_cookies
+from task.download_state import has_story_download_record, record_story_download_entry
 from task.download_filters import member_content_filter
+from task.channel_listing import (
+    PREFERRED_HTTP_HEADERS,
+    PREFERRED_YT_EXTRACTOR_ARGS,
+    fetch_channel_entries,
+)
 from task.ytdlp_support import (
     apply_js_runtime,
     cleanup_incomplete_downloads,
@@ -29,20 +35,6 @@ from task.ytdlp_support import (
 logger = get_logger('downloader.dl_audio')
 
 yt_base_url = "https://www.youtube.com/"
-
-PREFERRED_HTTP_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Accept-Language": "zh-TW,zh-CN;q=0.9,zh;q=0.8,en;q=0.7,ja;q=0.6",
-    "Sec-Fetch-Mode": "navigate",
-}
-
-PREFERRED_YT_EXTRACTOR_ARGS = {
-    'youtube': {
-        'lang': ['zh-TW'],
-        'player-client': ['web_embedded', 'ios', 'android']
-    }
-}
 
 
 def _extract_timestamp_from_entry(entry: dict) -> Optional[int]:
@@ -62,6 +54,52 @@ def _extract_timestamp_from_entry(entry: dict) -> Optional[int]:
     return None
 
 
+def _hydrate_story_entries(channel_name: str, entries: list[dict]) -> list[dict]:
+    """Resolve per-video metadata so story mode can filter/sort safely."""
+    detail_opts = {
+        "quiet": True,
+        "cookiefile": COOKIES_FILE,
+        "noplaylist": True,
+        "http_headers": PREFERRED_HTTP_HEADERS,
+        "extractor_args": PREFERRED_YT_EXTRACTOR_ARGS,
+    }
+    detail_opts = apply_js_runtime(detail_opts)
+
+    hydrated_entries: list[dict] = []
+    with yt_dlp.YoutubeDL(detail_opts) as detail_ydl:
+        for entry in entries:
+            if not entry or not isinstance(entry, dict):
+                continue
+            video_id = entry.get("id")
+            if not video_id:
+                continue
+            video_url = entry.get("webpage_url") or entry.get("url") or f"{yt_base_url}watch?v={video_id}"
+            try:
+                detail_info = detail_ydl.extract_info(video_url, download=False)
+            except Exception as err:
+                log_with_context(
+                    logger,
+                    logging.WARNING,
+                    "Story mode: failed to hydrate entry metadata, skipping item",
+                    yt_channel=channel_name,
+                    video_id=video_id,
+                    error=str(err),
+                )
+                continue
+
+            merged = dict(entry)
+            if isinstance(detail_info, dict):
+                merged.update(detail_info)
+            if not merged.get("webpage_url"):
+                merged["webpage_url"] = video_url
+            hydrated_entries.append(merged)
+
+    hydrated_entries.sort(
+        key=lambda item: _extract_timestamp_from_entry(item) or float('inf')
+    )
+    return hydrated_entries
+
+
 def dl_audio_story(channel_name: str, audio_folder: str, group_name: str, items_per_run: int = 1) -> bool:
     """Download next batch for story-type channels (oldest to newest)."""
     if not check_cookies():
@@ -78,19 +116,18 @@ def dl_audio_story(channel_name: str, audio_folder: str, group_name: str, items_
     except Exception as err:
         logger.warning(f"读取故事进度失败: {err}")
         progress = {}
+    if not progress:
+        log_with_context(
+            logger,
+            logging.INFO,
+            "Story mode: no stored checkpoint found",
+            yt_channel=channel_name,
+            tg_channel=group_name,
+        )
 
     last_video_id = progress.get("last_video_id")
     last_ts = progress.get("last_timestamp")
     run_started_ts = time.time()
-
-    list_opts = {
-        "quiet": True,
-        "cookiefile": COOKIES_FILE,
-        "playlistreverse": True,
-        "http_headers": PREFERRED_HTTP_HEADERS,
-        "extractor_args": PREFERRED_YT_EXTRACTOR_ARGS,
-    }
-    list_opts = apply_js_runtime(list_opts)
 
     last_ts_int: Optional[int] = None
     if last_ts is not None:
@@ -101,13 +138,15 @@ def dl_audio_story(channel_name: str, audio_folder: str, group_name: str, items_
 
     timestamp_checkpoint_value = last_ts_int if last_ts_int is not None else last_ts
 
+    selected_entries: list = []
+    items_limit = max(1, int(items_per_run or 1))
+    dateafter_value = None
     if last_ts_int is not None:
         try:
             cutoff_dt = datetime.datetime.fromtimestamp(
                 last_ts_int, tz=datetime.timezone.utc
             )
             dateafter_value = cutoff_dt.strftime("%Y%m%d")
-            list_opts["dateafter"] = dateafter_value
             logger.trace(
                 f"📚 故事频道 {group_name} 使用 dateafter 过滤：{dateafter_value}"
             )
@@ -115,90 +154,41 @@ def dl_audio_story(channel_name: str, audio_folder: str, group_name: str, items_
             logger.trace(
                 f"⚠️ 故事频道 {group_name} 设置 dateafter 失败，将回退到完整扫描: {err}"
             )
-    selected_entries: list = []
-    items_limit = max(1, int(items_per_run or 1))
 
-    entries = []
-    seen_ids: set = set()
-    story_tab_counts = {}
-    with yt_dlp.YoutubeDL(list_opts) as list_ydl:
-        for tab in ["videos", "streams"]:
-            tab_url = f"{yt_base_url}{channel_name}/{tab}"
-            log_with_context(
-                logger, TRACE_LEVEL,
-                f"Story mode: 开始获取 /{tab} 列表",
-                yt_channel=channel_name, url=tab_url
-            )
-            try:
-                tab_info = list_ydl.extract_info(tab_url, download=False)
-            except Exception as err:
-                log_with_context(
-                    logger,
-                    logging.WARNING,
-                    f"Story mode: failed to fetch /{tab} entries, skipping",
-                    yt_channel=channel_name,
-                    error=str(err),
-                )
-                story_tab_counts[tab] = 0
-                continue
+    listing = fetch_channel_entries(
+        channel_name=channel_name,
+        max_videos=max(200, items_limit * 50),
+        cookies_file=COOKIES_FILE,
+        playlist_reverse=True,
+        dateafter=dateafter_value,
+        extract_flat=True,
+        log_prefix="Story mode",
+        trace_success_logs=True,
+    )
+    entries = listing["entries"]
+    story_tab_counts = listing["tab_counts"]
+    listing_errors = listing.get("tab_errors") or {}
+    fetch_failures = sum(1 for err in listing_errors.values() if err)
 
-            if not tab_info:
-                log_with_context(
-                    logger, logging.WARNING,
-                    f"Story mode: /{tab} 返回空结果，跳过",
-                    yt_channel=channel_name
-                )
-                story_tab_counts[tab] = 0
-                continue
+    if fetch_failures and not entries:
+        log_with_context(
+            logger,
+            logging.ERROR,
+            "Story mode: failed to fetch any channel entries; aborting progress update",
+            yt_channel=channel_name,
+            tg_channel=group_name,
+            failed_tabs=",".join(sorted(tab for tab, err in listing_errors.items() if err)),
+        )
+        return False
 
-            raw_entries = tab_info.get("entries")
-            if raw_entries is None:
-                log_with_context(
-                    logger,
-                    TRACE_LEVEL,
-                    f"Story mode: 频道 /{tab} 无内容（该频道可能没有此类视频）",
-                    yt_channel=channel_name,
-                )
-                story_tab_counts[tab] = 0
-                continue
-
-            tab_added = 0
-            tab_dupes = 0
-            for entry in raw_entries:
-                if not entry or not isinstance(entry, dict):
-                    continue
-                vid_id = entry.get("id")
-                if vid_id and vid_id in seen_ids:
-                    tab_dupes += 1
-                    continue
-                if vid_id:
-                    seen_ids.add(vid_id)
-                entries.append(entry)
-                tab_added += 1
-
-            story_tab_counts[tab] = tab_added
-            log_with_context(
-                logger, TRACE_LEVEL,
-                f"Story mode: /{tab} 列表获取完成",
-                yt_channel=channel_name,
-                tab=tab,
-                new_entries=tab_added,
-                duplicates_skipped=tab_dupes
-            )
-
+    entries = _hydrate_story_entries(channel_name, entries)
     if not entries:
         log_with_context(
             logger,
             logging.WARNING,
-            "Story mode: channel returned no entries",
+            "Story mode: channel returned no usable entries",
             yt_channel=channel_name,
         )
-
-    def _sort_ts(entry):
-        ts = _extract_timestamp_from_entry(entry)
-        return ts if ts is not None else float('inf')
-
-    entries.sort(key=_sort_ts)
 
     log_with_context(
         logger, TRACE_LEVEL,
@@ -268,6 +258,7 @@ def dl_audio_story(channel_name: str, audio_folder: str, group_name: str, items_
     last_progress_id = None
     last_progress_ts = None
     downloaded = 0
+    skipped_unavailable = 0
 
     for entry in selected_entries:
         video_id = entry.get("id") or ""
@@ -291,9 +282,6 @@ def dl_audio_story(channel_name: str, audio_folder: str, group_name: str, items_
         expected_audio_ext = ".m4a"
         final_destination_audio_path = os.path.join(target_folder, f"{final_stem}{expected_audio_ext}")
 
-        last_progress_id = video_id
-        last_progress_ts = ts
-
         if downloaded > 0:
             v_delay_min = get_video_delay_min()
             v_delay_max = get_video_delay_max()
@@ -315,6 +303,23 @@ def dl_audio_story(channel_name: str, audio_folder: str, group_name: str, items_
                 yt_channel=channel_name,
                 video_id=video_id
             )
+            record_story_download_entry(video_id, channel_name, group_name)
+            downloaded += 1
+            last_progress_id = video_id
+            last_progress_ts = ts
+            continue
+
+        if has_story_download_record(video_id, group_name):
+            log_with_context(
+                logger, logging.INFO,
+                "故事视频已在故事存档中",
+                yt_channel=channel_name,
+                tg_channel=group_name,
+                video_id=video_id,
+            )
+            downloaded += 1
+            last_progress_id = video_id
+            last_progress_ts = ts
             continue
 
         custom_opts = {
@@ -331,10 +336,32 @@ def dl_audio_story(channel_name: str, audio_folder: str, group_name: str, items_
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 ydl.download([video_url])
         except yt_dlp.utils.DownloadError as err:
-            logger.error(f"故事视频下载错误: {err}")
+            log_with_context(
+                logger,
+                logging.WARNING,
+                "故事视频下载失败，跳过并继续推进",
+                yt_channel=channel_name,
+                tg_channel=group_name,
+                video_id=video_id,
+                error=str(err),
+            )
+            skipped_unavailable += 1
+            last_progress_id = video_id
+            last_progress_ts = ts
             continue
         except Exception as err:
-            logger.error(f"故事视频下载异常: {err}")
+            log_with_context(
+                logger,
+                logging.WARNING,
+                "故事视频下载异常，跳过并继续推进",
+                yt_channel=channel_name,
+                tg_channel=group_name,
+                video_id=video_id,
+                error=str(err),
+            )
+            skipped_unavailable += 1
+            last_progress_id = video_id
+            last_progress_ts = ts
             continue
 
         hook_reported_temp_path = downloaded_file_info.get("path")
@@ -373,11 +400,35 @@ def dl_audio_story(channel_name: str, audio_folder: str, group_name: str, items_
                     size_mb=round(file_size_mb, 2)
                 )
                 downloaded += 1
-                record_download_entry(video_id, channel_name)
+                record_story_download_entry(video_id, channel_name, group_name)
+                last_progress_id = video_id
+                last_progress_ts = ts
             else:
-                logger.error(f"故事视频重命名失败: {actual_temp_path}")
+                log_with_context(
+                    logger,
+                    logging.WARNING,
+                    "故事视频重命名失败，跳过并继续推进",
+                    yt_channel=channel_name,
+                    tg_channel=group_name,
+                    video_id=video_id,
+                    temp_path=actual_temp_path,
+                )
+                skipped_unavailable += 1
+                last_progress_id = video_id
+                last_progress_ts = ts
         else:
-            logger.error(f"未找到预期的临时文件 (hook path: {hook_reported_temp_path})")
+            log_with_context(
+                logger,
+                logging.WARNING,
+                "故事视频未找到预期文件，跳过并继续推进",
+                yt_channel=channel_name,
+                tg_channel=group_name,
+                video_id=video_id,
+                hook_path=hook_reported_temp_path,
+            )
+            skipped_unavailable += 1
+            last_progress_id = video_id
+            last_progress_ts = ts
 
     if last_progress_id:
         provider.update_story_progress(group_name, {
@@ -388,4 +439,15 @@ def dl_audio_story(channel_name: str, audio_folder: str, group_name: str, items_
     else:
         provider.update_story_progress(group_name, {"last_run_ts": int(run_started_ts)})
 
-    return downloaded > 0
+    if skipped_unavailable > 0:
+        log_with_context(
+            logger,
+            logging.INFO,
+            "故事模式本轮跳过不可用条目",
+            yt_channel=channel_name,
+            tg_channel=group_name,
+            skipped_unavailable=skipped_unavailable,
+            downloaded=downloaded,
+        )
+
+    return True

@@ -3,10 +3,92 @@ import logging
 import os
 from typing import Optional
 
-from config import COOKIES_FILE, DOWNLOAD_ARCHIVE, get_config_provider
+from config import COOKIES_FILE, DOWNLOAD_ARCHIVE, STORY_DOWNLOAD_ARCHIVE, get_config_provider
 from logger import TRACE_LEVEL, get_logger, log_with_context
 
 logger = get_logger('downloader.dl_audio')
+
+_story_download_archive_cache = {
+    "mtime": None,
+    "entries": set(),
+}
+
+
+def _build_story_archive_key(video_id: str, group_name: Optional[str]) -> str:
+    safe_group = (group_name or "story").strip() or "story"
+    safe_video_id = (video_id or "").strip()
+    return f"{safe_group}::{safe_video_id}"
+
+
+def _load_story_download_archive() -> set:
+    path = STORY_DOWNLOAD_ARCHIVE
+    if not path:
+        return set()
+    try:
+        current_mtime = os.path.getmtime(path)
+    except (FileNotFoundError, OSError):
+        return set()
+
+    cached_mtime = _story_download_archive_cache.get("mtime")
+    if cached_mtime == current_mtime:
+        return _story_download_archive_cache.get("entries", set())
+
+    entries = set()
+    try:
+        with open(path, 'r', encoding='utf-8') as file:
+            for line in file:
+                line = line.strip()
+                if line and not line.startswith('#'):
+                    entries.add(line)
+    except Exception:
+        return _story_download_archive_cache.get("entries", set())
+
+    _story_download_archive_cache["mtime"] = current_mtime
+    _story_download_archive_cache["entries"] = entries
+    return entries
+
+
+def has_story_download_record(video_id: str, group_name: Optional[str]) -> bool:
+    if not video_id:
+        return False
+    return _build_story_archive_key(video_id, group_name) in _load_story_download_archive()
+
+
+def record_story_download_entry(video_id: str, channel_name: Optional[str], group_name: Optional[str]) -> None:
+    if not video_id:
+        return
+
+    key = _build_story_archive_key(video_id, group_name)
+    try:
+        existing = _load_story_download_archive()
+        if key in existing:
+            logger.trace(f"故事下载存档记录已存在: {key}")
+            return
+
+        os.makedirs(os.path.dirname(STORY_DOWNLOAD_ARCHIVE), exist_ok=True)
+        with open(STORY_DOWNLOAD_ARCHIVE, 'a', encoding='utf-8') as file:
+            file.write(f"{key}\n")
+
+        _story_download_archive_cache["mtime"] = os.path.getmtime(STORY_DOWNLOAD_ARCHIVE)
+        _story_download_archive_cache["entries"] = set(existing)
+        _story_download_archive_cache["entries"].add(key)
+
+        log_with_context(
+            logger, TRACE_LEVEL,
+            "已记录故事下载存档",
+            video_id=video_id,
+            yt_channel=channel_name,
+            tg_channel=group_name,
+        )
+    except Exception as err:
+        log_with_context(
+            logger, logging.ERROR,
+            "记录故事下载存档异常",
+            video_id=video_id,
+            yt_channel=channel_name,
+            tg_channel=group_name,
+            error=str(err)
+        )
 
 
 def record_download_entry(video_id: str, channel_name: Optional[str]) -> None:

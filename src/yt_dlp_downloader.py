@@ -238,13 +238,22 @@ def _run_due_story_groups(due_story_groups, story_last_run):
             yt_channel=channel,
             items=task['items_per_run']
         )
-        dl_audio_story(
+        story_run_ok = dl_audio_story(
             channel_name=channel,
             audio_folder=task['audio_folder'],
             group_name=group_name,
             items_per_run=task['items_per_run']
         )
-        story_last_run[group_name] = time.time()
+        if story_run_ok:
+            story_last_run[group_name] = time.time()
+        else:
+            log_with_context(
+                logger,
+                logging.WARNING,
+                "故事模式执行失败，保留原调度时间以便尽快重试",
+                tg_channel=group_name,
+                yt_channel=channel,
+            )
 
 
 def _run_realtime_groups(realtime_groups):

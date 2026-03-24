@@ -275,6 +275,16 @@ def get_download_archive() -> str:
         return path
     return os.path.join(PROJECT_ROOT, path)
 
+def get_story_download_archive() -> str:
+    """获取故事模式专用下载存档文件路径。"""
+    path = get_config_value('downloader.story_download_archive')
+    if not path:
+        path = 'data/story_download_archive.txt'
+
+    if os.path.isabs(path):
+        return path
+    return os.path.join(PROJECT_ROOT, path)
+
 def get_sent_archive_path(chat_id: str, readable: bool = False) -> str:
     """
     获取频道已发送记录文件路径
@@ -300,6 +310,7 @@ def get_sent_archive_path(chat_id: str, readable: bool = False) -> str:
 AUDIO_FOLDER = get_audio_folder()
 COOKIES_FILE = get_cookies_file()
 DOWNLOAD_ARCHIVE = get_download_archive()
+STORY_DOWNLOAD_ARCHIVE = get_story_download_archive()
 
 # ============================================================
 # 配置获取函数
