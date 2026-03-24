@@ -17,7 +17,6 @@ if sys.stderr.encoding != 'utf-8':
 import time
 import signal
 import subprocess
-import multiprocessing
 import logging
 import json
 from pathlib import Path
@@ -53,24 +52,6 @@ def _write_process_info(downloader_pid=None, bot_pid=None):
     with open(PROCESS_INFO_PATH, 'w', encoding='utf-8') as f:
         json.dump(process_info, f, indent=2, ensure_ascii=False)
 
-def _run_downloader():
-    """子进程运行：YouTube 下载器"""
-    try:
-        subprocess.run([
-            sys.executable, "src/yt_dlp_downloader.py"
-        ], cwd=PROJECT_ROOT)
-    except Exception as e:
-        print(f"YouTube 下载器进程错误: {e}")
-
-def _run_bot():
-    """子进程运行：Telegram 机器人"""
-    try:
-        subprocess.run([
-            sys.executable, "src/telegram_bot.py"
-        ], cwd=PROJECT_ROOT)
-    except Exception as e:
-        print(f"Telegram 机器人进程错误: {e}")
-
 class ProcessManager:
     def __init__(self):
         self.downloader_process = None
@@ -99,19 +80,23 @@ class ProcessManager:
         heartbeat.update("stopping_children")
         sys_logger.info("开始停止所有子进程")
         
-        if self.downloader_process and self.downloader_process.is_alive():
+        if self.downloader_process and self.downloader_process.poll() is None:
             logger.info("停止 YouTube 下载器...")
             self.downloader_process.terminate()
-            self.downloader_process.join(timeout=5)
-            if self.downloader_process.is_alive():
+            try:
+                self.downloader_process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
                 self.downloader_process.kill()
+                self.downloader_process.wait(timeout=5)
         
-        if self.bot_process and self.bot_process.is_alive():
+        if self.bot_process and self.bot_process.poll() is None:
             logger.info("停止 Telegram 机器人...")
             self.bot_process.terminate()
-            self.bot_process.join(timeout=5)
-            if self.bot_process.is_alive():
+            try:
+                self.bot_process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
                 self.bot_process.kill()
+                self.bot_process.wait(timeout=5)
 
         _write_process_info(downloader_pid=None, bot_pid=None)
         heartbeat.stop("children_stopped")
@@ -120,11 +105,10 @@ class ProcessManager:
         sys_logger.info("所有子进程已停止")
 
     def _start_downloader(self):
-        self.downloader_process = multiprocessing.Process(
-            target=_run_downloader,
-            name="YouTubeDownloader"
+        self.downloader_process = subprocess.Popen(
+            [sys.executable, "src/yt_dlp_downloader.py"],
+            cwd=PROJECT_ROOT,
         )
-        self.downloader_process.start()
         logger.info(f"YouTube 下载器已启动 (PID: {self.downloader_process.pid})")
         self.start_times["downloader"] = time.time()
         heartbeat.update("downloader_started", pid=self.downloader_process.pid)
@@ -134,11 +118,10 @@ class ProcessManager:
         )
 
     def _start_bot(self):
-        self.bot_process = multiprocessing.Process(
-            target=_run_bot,
-            name="TelegramBot"
+        self.bot_process = subprocess.Popen(
+            [sys.executable, "src/telegram_bot.py"],
+            cwd=PROJECT_ROOT,
         )
-        self.bot_process.start()
         logger.info(f"Telegram 机器人已启动 (PID: {self.bot_process.pid})")
         self.start_times["bot"] = time.time()
         heartbeat.update("bot_started", pid=self.bot_process.pid)
@@ -224,32 +207,32 @@ class ProcessManager:
                 heartbeat.update(
                     "monitoring",
                     downloader_pid=self.downloader_process.pid if self.downloader_process else None,
-                    downloader_alive=self.downloader_process.is_alive() if self.downloader_process else False,
+                    downloader_alive=self.downloader_process.poll() is None if self.downloader_process else False,
                     bot_pid=self.bot_process.pid if self.bot_process else None,
-                    bot_alive=self.bot_process.is_alive() if self.bot_process else False,
+                    bot_alive=self.bot_process.poll() is None if self.bot_process else False,
                 )
                 
                 # 检查进程是否还在运行
-                if not self.downloader_process.is_alive():
+                if self.downloader_process.poll() is not None:
                     logger.warning("YouTube 下载器进程意外退出")
                     log_with_context(
                         sys_logger, logging.WARNING,
                         "下载器进程意外退出",
                         process_name="YouTubeDownloader",
                         pid=self.downloader_process.pid,
-                        exitcode=self.downloader_process.exitcode
+                        exitcode=self.downloader_process.returncode
                     )
                     self._restart_process("downloader")
                     continue
                 
-                if not self.bot_process.is_alive():
+                if self.bot_process.poll() is not None:
                     logger.warning("Telegram 机器人进程意外退出")
                     log_with_context(
                         sys_logger, logging.WARNING,
                         "机器人进程意外退出",
                         process_name="TelegramBot",
                         pid=self.bot_process.pid,
-                        exitcode=self.bot_process.exitcode
+                        exitcode=self.bot_process.returncode
                     )
                     self._restart_process("bot")
                     continue
