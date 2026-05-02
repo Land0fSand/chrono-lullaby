@@ -188,6 +188,16 @@ class NotionLogHandler(logging.Handler):
             return
 
 
+class SafeRotatingFileHandler(logging.handlers.RotatingFileHandler):
+    """RotatingFileHandler variant that does not let rollover errors spam stderr."""
+
+    def handleError(self, record: logging.LogRecord) -> None:
+        exc_type, exc, _ = sys.exc_info()
+        if isinstance(exc, PermissionError):
+            return
+        super().handleError(record)
+
+
 class LoggerManager:
     """
     日志管理器，负责创建和配置各个组件的 logger
@@ -196,6 +206,7 @@ class LoggerManager:
     _instance = None
     _initialized = False
     aggregate_handler: Optional[logging.Handler] = None
+    component_file_handlers: dict[str, logging.Handler] = {}
     
     def __new__(cls):
         if cls._instance is None:
@@ -217,14 +228,17 @@ class LoggerManager:
             self.log_dir.mkdir(exist_ok=True)
             self.single_file_mode = self._load_single_file_flag()
             self.rotation_config = self._load_rotation_config()
-            self.aggregate_handler = self._create_aggregate_handler()
+            self.aggregate_handler = self._create_aggregate_handler() if self.single_file_mode else None
+            self.component_file_handlers = {}
             LoggerManager._initialized = True
         else:
             if not hasattr(self, "single_file_mode"):
                 self.single_file_mode = self._load_single_file_flag()
             if not hasattr(self, "rotation_config"):
                 self.rotation_config = self._load_rotation_config()
-            if not hasattr(self, "aggregate_handler") or self.aggregate_handler is None:
+            if self.single_file_mode and (
+                not hasattr(self, "aggregate_handler") or self.aggregate_handler is None
+            ):
                 self.aggregate_handler = self._create_aggregate_handler()
 
     def _load_single_file_flag(self) -> bool:
@@ -240,7 +254,7 @@ class LoggerManager:
                 return value
         except Exception:
             pass
-        return True
+        return False
 
     def _load_rotation_config(self) -> dict:
         """
@@ -277,7 +291,7 @@ class LoggerManager:
         """
         try:
             log_file = self.log_dir / "all.log"
-            handler = logging.handlers.RotatingFileHandler(
+            handler = SafeRotatingFileHandler(
                 log_file,
                 maxBytes=self.rotation_config.get("max_bytes", 20 * 1024 * 1024),
                 backupCount=self.rotation_config.get("backup_count", 10),
@@ -292,6 +306,30 @@ class LoggerManager:
                 file=sys.stderr
             )
             return None
+
+    def _component_log_key(self, component: str) -> str:
+        base_component = component.split('.')[0] if component else 'app'
+        if base_component in ('downloader', 'bot', 'launcher', 'system'):
+            return base_component
+        return 'app'
+
+    def _get_component_file_handler(self, component: str) -> logging.Handler:
+        log_key = self._component_log_key(component)
+        handler = self.component_file_handlers.get(log_key)
+        if handler:
+            return handler
+
+        log_file = self.log_dir / f"{log_key}.log"
+        handler = SafeRotatingFileHandler(
+            log_file,
+            maxBytes=self.rotation_config.get("max_bytes", 20 * 1024 * 1024),
+            backupCount=self.rotation_config.get("backup_count", 10),
+            encoding='utf-8'
+        )
+        handler.setLevel(logging.NOTSET)
+        handler.setFormatter(JSONFormatter())
+        self.component_file_handlers[log_key] = handler
+        return handler
     
     def get_logger(
         self,
@@ -334,25 +372,17 @@ class LoggerManager:
 
         # 文件 Handler（JSONL 格式）
         if file and not self.single_file_mode:
-            # 主日志文件（所有级别）
-            log_file = self.log_dir / f"{component}.log"
-            file_handler = logging.handlers.RotatingFileHandler(
-                log_file,
-                maxBytes=10 * 1024 * 1024,  # 10 MB
-                backupCount=5,
-                encoding='utf-8'
-            )
+            file_handler = self._get_component_file_handler(component)
             file_handler.setLevel(target_level)
-            file_handler.setFormatter(JSONFormatter())
             logger.addHandler(file_handler)
 
             # 错误日志文件（仅 ERROR 及以上）
             if separate_error_file:
                 error_file = self.log_dir / f"{component}_error.log"
-                error_handler = logging.handlers.RotatingFileHandler(
+                error_handler = SafeRotatingFileHandler(
                     error_file,
-                    maxBytes=10 * 1024 * 1024,  # 10 MB
-                    backupCount=5,
+                    maxBytes=self.rotation_config.get("max_bytes", 20 * 1024 * 1024),
+                    backupCount=self.rotation_config.get("backup_count", 10),
                     encoding='utf-8'
                 )
                 error_handler.setLevel(logging.ERROR)
@@ -439,15 +469,8 @@ def get_system_logger() -> logging.Logger:
 
     # 文件 Handler（JSONL 格式）- 系统日志
     if not manager.single_file_mode:
-        log_file = manager.log_dir / "system.log"
-        file_handler = logging.handlers.RotatingFileHandler(
-            log_file,
-            maxBytes=10 * 1024 * 1024,  # 10 MB
-            backupCount=5,
-            encoding='utf-8'
-        )
+        file_handler = manager._get_component_file_handler("system")
         file_handler.setLevel(target_level)
-        file_handler.setFormatter(JSONFormatter())
         logger.addHandler(file_handler)
 
     if manager.aggregate_handler and manager.aggregate_handler not in logger.handlers:
@@ -515,4 +538,3 @@ if __name__ == "__main__":
     
     print(f"\n日志文件已写入: {Path(__file__).parent.parent / 'logs' / 'test.log'}")
     print("可以使用 jq 工具查看: jq . logs/test.log")
-

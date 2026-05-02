@@ -36,6 +36,67 @@ logger = get_logger('downloader.dl_audio')
 
 yt_base_url = "https://www.youtube.com/"
 
+STORY_HYDRATE_MIN_ENTRIES = 8
+STORY_HYDRATE_MAX_ENTRIES = 16
+STORY_HYDRATE_LOOKAHEAD_MULTIPLIER = 8
+STORY_HYDRATE_DELAY_MIN_SECONDS = 8
+STORY_HYDRATE_DELAY_MAX_SECONDS = 18
+STORY_LIST_MIN_ENTRIES = 500
+
+
+def _find_existing_story_audio_file(target_folder: str, video_id: str) -> Optional[str]:
+    try:
+        for name in os.listdir(target_folder):
+            if f'.{video_id}.' in name and name.endswith('.m4a') and '.tmp' not in name:
+                return os.path.join(target_folder, name)
+    except OSError:
+        return None
+    return None
+
+
+def _resolve_story_temp_audio_path(
+    target_folder: str,
+    video_id: str,
+    downloaded_file_info: dict,
+) -> Optional[str]:
+    temp_audio_path = downloaded_file_info.get("path")
+    if temp_audio_path and os.path.exists(temp_audio_path):
+        return temp_audio_path
+    try:
+        for name in os.listdir(target_folder):
+            if f'.{video_id}.' in name and name.endswith('.tmp.m4a'):
+                return os.path.join(target_folder, name)
+    except OSError:
+        return None
+    return None
+
+
+def _resolve_story_chat_id(provider, group_name: str) -> Optional[str]:
+    try:
+        get_groups = getattr(provider, "get_channel_groups", None)
+        if not callable(get_groups):
+            return None
+        for group in get_groups():
+            if group.get("name") == group_name:
+                chat_id = group.get("telegram_chat_id")
+                if chat_id:
+                    return str(chat_id)
+    except Exception:
+        return None
+    return None
+
+
+def _story_channel_has_sent_record(provider, chat_id: Optional[str], video_id: str) -> bool:
+    if not chat_id or not video_id:
+        return False
+    try:
+        has_sent = getattr(provider, "has_sent_record", None)
+        if callable(has_sent):
+            return bool(has_sent(video_id, str(chat_id)))
+    except Exception:
+        return False
+    return False
+
 
 def _extract_timestamp_from_entry(entry: dict) -> Optional[int]:
     """Extract upload timestamp (UTC seconds) from yt-dlp entry."""
@@ -54,8 +115,69 @@ def _extract_timestamp_from_entry(entry: dict) -> Optional[int]:
     return None
 
 
+def _story_hydrate_limit(items_limit: int) -> int:
+    return min(
+        STORY_HYDRATE_MAX_ENTRIES,
+        max(STORY_HYDRATE_MIN_ENTRIES, items_limit * STORY_HYDRATE_LOOKAHEAD_MULTIPLIER),
+    )
+
+
+def _select_story_candidate_entries(
+    entries: list[dict],
+    *,
+    last_ts_int: Optional[int],
+    last_video_id: Optional[str],
+    limit: int,
+) -> tuple[list[dict], bool]:
+    if not entries:
+        return [], False
+
+    selected: list[dict] = []
+    checkpoint_found = last_video_id is None
+
+    if last_ts_int is not None and last_video_id:
+        has_timestamp = any(_extract_timestamp_from_entry(entry) is not None for entry in entries)
+        if not has_timestamp:
+            for entry in entries:
+                entry_id = entry.get("id")
+                if not checkpoint_found:
+                    if entry_id == last_video_id:
+                        checkpoint_found = True
+                    continue
+                selected.append(entry)
+                if len(selected) >= limit:
+                    break
+            if not checkpoint_found:
+                return entries[:limit], False
+            return selected, True
+
+    if last_ts_int is not None:
+        for entry in entries:
+            entry_ts = _extract_timestamp_from_entry(entry)
+            if entry_ts is not None and entry_ts <= last_ts_int:
+                continue
+            selected.append(entry)
+            if len(selected) >= limit:
+                break
+        return selected, True
+
+    for entry in entries:
+        entry_id = entry.get("id")
+        if not checkpoint_found:
+            if entry_id == last_video_id:
+                checkpoint_found = True
+            continue
+        selected.append(entry)
+        if len(selected) >= limit:
+            break
+
+    if last_video_id and not checkpoint_found:
+        return entries[:limit], False
+    return selected, True
+
+
 def _hydrate_story_entries(channel_name: str, entries: list[dict]) -> list[dict]:
-    """Resolve per-video metadata so story mode can filter/sort safely."""
+    """Resolve a small story candidate window without hammering YouTube detail pages."""
     detail_opts = {
         "quiet": True,
         "cookiefile": COOKIES_FILE,
@@ -67,7 +189,7 @@ def _hydrate_story_entries(channel_name: str, entries: list[dict]) -> list[dict]
 
     hydrated_entries: list[dict] = []
     with yt_dlp.YoutubeDL(detail_opts) as detail_ydl:
-        for entry in entries:
+        for index, entry in enumerate(entries):
             if not entry or not isinstance(entry, dict):
                 continue
             video_id = entry.get("id")
@@ -85,6 +207,24 @@ def _hydrate_story_entries(channel_name: str, entries: list[dict]) -> list[dict]
                     video_id=video_id,
                     error=str(err),
                 )
+                if _extract_timestamp_from_entry(entry) is not None:
+                    fallback_entry = dict(entry)
+                    if not fallback_entry.get("webpage_url"):
+                        fallback_entry["webpage_url"] = video_url
+                    hydrated_entries.append(fallback_entry)
+                if index < len(entries) - 1:
+                    delay = random.uniform(
+                        STORY_HYDRATE_DELAY_MIN_SECONDS,
+                        STORY_HYDRATE_DELAY_MAX_SECONDS,
+                    )
+                    log_with_context(
+                        logger,
+                        logging.INFO,
+                        "Story mode: hydrate detail delay",
+                        yt_channel=channel_name,
+                        delay_seconds=round(delay, 2),
+                    )
+                    time.sleep(delay)
                 continue
 
             merged = dict(entry)
@@ -93,6 +233,20 @@ def _hydrate_story_entries(channel_name: str, entries: list[dict]) -> list[dict]
             if not merged.get("webpage_url"):
                 merged["webpage_url"] = video_url
             hydrated_entries.append(merged)
+
+            if index < len(entries) - 1:
+                delay = random.uniform(
+                    STORY_HYDRATE_DELAY_MIN_SECONDS,
+                    STORY_HYDRATE_DELAY_MAX_SECONDS,
+                )
+                log_with_context(
+                    logger,
+                    logging.INFO,
+                    "Story mode: hydrate detail delay",
+                    yt_channel=channel_name,
+                    delay_seconds=round(delay, 2),
+                )
+                time.sleep(delay)
 
     hydrated_entries.sort(
         key=lambda item: _extract_timestamp_from_entry(item) or float('inf')
@@ -124,6 +278,7 @@ def dl_audio_story(channel_name: str, audio_folder: str, group_name: str, items_
             yt_channel=channel_name,
             tg_channel=group_name,
         )
+    story_chat_id = _resolve_story_chat_id(provider, group_name)
 
     last_video_id = progress.get("last_video_id")
     last_ts = progress.get("last_timestamp")
@@ -138,7 +293,7 @@ def dl_audio_story(channel_name: str, audio_folder: str, group_name: str, items_
 
     timestamp_checkpoint_value = last_ts_int if last_ts_int is not None else last_ts
 
-    selected_entries: list = []
+    pending_entries: list = []
     items_limit = max(1, int(items_per_run or 1))
     dateafter_value = None
     if last_ts_int is not None:
@@ -157,7 +312,7 @@ def dl_audio_story(channel_name: str, audio_folder: str, group_name: str, items_
 
     listing = fetch_channel_entries(
         channel_name=channel_name,
-        max_videos=max(200, items_limit * 50),
+        max_videos=max(STORY_LIST_MIN_ENTRIES, items_limit * 50),
         cookies_file=COOKIES_FILE,
         playlist_reverse=True,
         dateafter=dateafter_value,
@@ -181,7 +336,34 @@ def dl_audio_story(channel_name: str, audio_folder: str, group_name: str, items_
         )
         return False
 
-    entries = _hydrate_story_entries(channel_name, entries)
+    hydrate_limit = _story_hydrate_limit(items_limit)
+    candidate_entries, checkpoint_found = _select_story_candidate_entries(
+        entries,
+        last_ts_int=last_ts_int,
+        last_video_id=last_video_id,
+        limit=hydrate_limit,
+    )
+    if last_video_id and not checkpoint_found:
+        log_with_context(
+            logger,
+            logging.WARNING,
+            "Story mode: checkpoint video not found, defaulting to earliest candidate window",
+            yt_channel=channel_name,
+            checkpoint_video=last_video_id,
+            candidate_count=len(candidate_entries),
+        )
+
+    log_with_context(
+        logger,
+        logging.INFO,
+        "Story mode: selected small candidate window before hydrate",
+        yt_channel=channel_name,
+        total_entries=len(entries),
+        candidate_count=len(candidate_entries),
+        hydrate_limit=hydrate_limit,
+    )
+
+    entries = _hydrate_story_entries(channel_name, candidate_entries)
     if not entries:
         log_with_context(
             logger,
@@ -214,9 +396,7 @@ def dl_audio_story(channel_name: str, audio_folder: str, group_name: str, items_
                     continue
                 if entry_ts <= last_ts_int:
                     continue
-                selected_entries.append(entry)
-                if len(selected_entries) >= items_limit:
-                    break
+                pending_entries.append(entry)
         else:
             found_last_id = last_video_id is None
             for entry in entries:
@@ -225,18 +405,9 @@ def dl_audio_story(channel_name: str, audio_folder: str, group_name: str, items_
                     if entry_id == last_video_id:
                         found_last_id = True
                     continue
-                selected_entries.append(entry)
-                if len(selected_entries) >= items_limit:
-                    break
+                pending_entries.append(entry)
             if last_video_id and not found_last_id:
-                log_with_context(
-                    logger,
-                    logging.WARNING,
-                    "Story mode: checkpoint video not found, defaulting to earliest entries",
-                    yt_channel=channel_name,
-                    checkpoint_video=last_video_id,
-                )
-                selected_entries = entries[:items_limit]
+                pending_entries = entries[:]
     else:
         log_with_context(
             logger,
@@ -245,7 +416,7 @@ def dl_audio_story(channel_name: str, audio_folder: str, group_name: str, items_
             yt_channel=channel_name,
         )
 
-    if not selected_entries:
+    if not pending_entries:
         log_with_context(
             logger,
             logging.INFO,
@@ -260,7 +431,9 @@ def dl_audio_story(channel_name: str, audio_folder: str, group_name: str, items_
     downloaded = 0
     skipped_unavailable = 0
 
-    for entry in selected_entries:
+    for entry in pending_entries:
+        if downloaded >= items_limit:
+            break
         video_id = entry.get("id") or ""
         if not video_id:
             continue
@@ -296,12 +469,14 @@ def dl_audio_story(channel_name: str, audio_folder: str, group_name: str, items_
                 )
                 time.sleep(delay)
 
-        if os.path.exists(final_destination_audio_path):
+        existing_audio_path = _find_existing_story_audio_file(target_folder, video_id)
+        if existing_audio_path or os.path.exists(final_destination_audio_path):
             log_with_context(
                 logger, logging.INFO,
                 "故事视频已存在",
                 yt_channel=channel_name,
-                video_id=video_id
+                video_id=video_id,
+                file_path=existing_audio_path or final_destination_audio_path,
             )
             record_story_download_entry(video_id, channel_name, group_name)
             downloaded += 1
@@ -310,17 +485,29 @@ def dl_audio_story(channel_name: str, audio_folder: str, group_name: str, items_
             continue
 
         if has_story_download_record(video_id, group_name):
+            if _story_channel_has_sent_record(provider, story_chat_id, video_id):
+                log_with_context(
+                    logger, logging.INFO,
+                    "故事视频已在故事存档且已发送",
+                    yt_channel=channel_name,
+                    tg_channel=group_name,
+                    telegram_chat_id=story_chat_id,
+                    video_id=video_id,
+                )
+                downloaded += 1
+                last_progress_id = video_id
+                last_progress_ts = ts
+                continue
+
             log_with_context(
-                logger, logging.INFO,
-                "故事视频已在故事存档中",
+                logger,
+                logging.WARNING,
+                "故事视频仅存在故事存档记录，将继续尝试下载",
                 yt_channel=channel_name,
                 tg_channel=group_name,
+                telegram_chat_id=story_chat_id,
                 video_id=video_id,
             )
-            downloaded += 1
-            last_progress_id = video_id
-            last_progress_ts = ts
-            continue
 
         custom_opts = {
             "match_filter": member_content_filter,
@@ -365,39 +552,27 @@ def dl_audio_story(channel_name: str, audio_folder: str, group_name: str, items_
             continue
 
         hook_reported_temp_path = downloaded_file_info.get("path")
-        actual_temp_path = hook_reported_temp_path
-        resolved_temp_path = None
-
-        candidate_paths = []
-        if actual_temp_path:
-            candidate_paths.append(actual_temp_path)
-            parent_dir, temp_filename = os.path.split(actual_temp_path)
-            if ".tmp.f" in temp_filename:
-                normalized_filename = re.sub(r"(\.tmp)\.f\d+(?=\.)", r"\1", temp_filename)
-                candidate_paths.append(os.path.join(parent_dir, normalized_filename))
-
-        for candidate in candidate_paths:
-            if candidate and os.path.exists(candidate):
-                resolved_temp_path = candidate
-                break
-
-        if not resolved_temp_path:
-            for file_name in os.listdir(target_folder):
-                if video_id in file_name and (file_name.endswith('.tmp.m4a') or file_name.endswith('.tmp')):
-                    resolved_temp_path = os.path.join(target_folder, file_name)
-                    break
-
-        actual_temp_path = resolved_temp_path
+        actual_temp_path = _resolve_story_temp_audio_path(
+            target_folder,
+            video_id,
+            downloaded_file_info,
+        )
 
         if actual_temp_path and os.path.exists(actual_temp_path):
-            if safe_rename_file(actual_temp_path, final_destination_audio_path):
-                file_size_mb = os.path.getsize(final_destination_audio_path) / (1024 * 1024)
+            normalized_audio_path = re.sub(r'\.tmp(\.m4a)$', r'\1', actual_temp_path)
+            rename_ok = (
+                os.path.normcase(actual_temp_path) == os.path.normcase(normalized_audio_path)
+                or safe_rename_file(actual_temp_path, normalized_audio_path)
+            )
+            if rename_ok:
+                file_size_mb = os.path.getsize(normalized_audio_path) / (1024 * 1024)
                 log_with_context(
                     logger, logging.INFO,
                     "故事视频下载成功",
                     yt_channel=channel_name,
                     video_id=video_id,
-                    size_mb=round(file_size_mb, 2)
+                    size_mb=round(file_size_mb, 2),
+                    file_path=normalized_audio_path,
                 )
                 downloaded += 1
                 record_story_download_entry(video_id, channel_name, group_name)

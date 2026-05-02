@@ -34,7 +34,7 @@ notion:
 
     # 自动日志清理配置（可选）
     auto_cleanup:
-      enabled: false                  # 是否启用自动清理（默认关闭）
+      enabled: true                   # 是否启用自动清理
       check_interval_days: 7          # 每隔 N 天检查一次
       keep_days: 30                   # 普通日志（INFO/WARNING）保留天数
       error_keep_days: 90             # ERROR 日志单独保留天数（默认 3 个月）
@@ -42,10 +42,10 @@ notion:
 
 log:
   level: INFO                         # 控制控制台/文件/Notion 日志等级
-  single_file_mode: true              # 是否仅使用 logs/all.log 来汇总日志
+  single_file_mode: false             # 默认按组件写 logs/downloader.log、logs/bot.log 等，避免多进程争抢 all.log
   file:
-    max_bytes: 20971520               # all.log 最大字节数，默认 20MB
-    backup_count: 10                  # 额外 all.log.N 轮转文件数量
+    max_bytes: 20971520               # 单个本地日志文件最大字节数，默认 20MB
+    backup_count: 10                  # 每个本地日志文件保留的轮转备份数量
 
 debug:
   enabled: true
