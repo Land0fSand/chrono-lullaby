@@ -163,7 +163,7 @@ def get_config_provider():
     """
     global _config_provider
     if _config_provider is None:
-        init_config_provider()
+        init_config_provider(mode_override=os.environ.get('CONFIG_MODE'))
     return _config_provider
 
 

@@ -67,7 +67,7 @@ PREFERRED_HTTP_HEADERS = {
 PREFERRED_YT_EXTRACTOR_ARGS = {
     'youtube': {
         'lang': ['zh-TW'],
-        'player-client': ['web_embedded', 'ios', 'android']
+        'player_client': ['web_embedded', 'ios', 'android']
     }
 }
 
@@ -274,6 +274,8 @@ def _process_latest_video_entry(
     channel_name,
     target_folder,
     ydl_opts,
+    entry_filter=combined_filter,
+    inter_video_delay=None,
 ):
     video_title = video_info.get('title', '未知标题')
     video_id = video_info.get('id', 'unknown')
@@ -301,7 +303,7 @@ def _process_latest_video_entry(
         return video_title, video_id
 
     upload_date_str = _format_upload_date(video_info)
-    filter_result = combined_filter(video_info)
+    filter_result = entry_filter(video_info)
     if filter_result:
         log_with_context(
             logger, TRACE_LEVEL,
@@ -507,8 +509,11 @@ def _process_latest_video_entry(
     record_download_entry(video_id, channel_name)
 
     if idx < stats['total']:
-        video_delay_min = get_video_delay_min()
-        video_delay_max = get_video_delay_max()
+        if inter_video_delay is None:
+            video_delay_min = get_video_delay_min()
+            video_delay_max = get_video_delay_max()
+        else:
+            video_delay_min, video_delay_max = inter_video_delay
         if video_delay_max > 0:
             delay = random.uniform(video_delay_min, video_delay_max)
             log_with_context(
@@ -583,7 +588,20 @@ def _handle_latest_channel_error(channel_name, err, video_title, video_id):
     return False
 
 
-def dl_audio_latest(channel_name, audio_folder=None, group_name=None):
+def dl_audio_latest(
+    channel_name,
+    audio_folder=None,
+    group_name=None,
+    *,
+    filter_days_override=None,
+    filter_cutoff_override=None,
+    max_videos_override=None,
+    entries_override=None,
+    sync_archive=True,
+    return_stats=False,
+    inter_video_delay=None,
+    socket_timeout_override=None,
+):
     """
     下载指定YouTube频道的最新音频
 
@@ -601,16 +619,36 @@ def dl_audio_latest(channel_name, audio_folder=None, group_name=None):
         logger.info(f"已创建音频目录: {target_folder}")
 
     cleanup_incomplete_downloads(target_folder)
-    sync_download_archive()
+    if sync_archive:
+        sync_download_archive()
 
-    max_videos = get_max_videos_per_channel()
+    max_videos = (
+        max_videos_override
+        if max_videos_override is not None
+        else get_max_videos_per_channel()
+    )
+    entry_filter = (
+        (lambda info: combined_filter(
+            info,
+            filter_days=filter_days_override,
+            cutoff_datetime=filter_cutoff_override,
+        ))
+        if filter_days_override is not None or filter_cutoff_override is not None
+        else combined_filter
+    )
     custom_opts = {
         "download_archive": DOWNLOAD_ARCHIVE,
         "playlistend": max_videos,
-        "match_filter": combined_filter,
+        "match_filter": entry_filter,
         "keepvideo": False,
         "outtmpl": os.path.join(target_folder, "%(uploader)s.%(id)s.%(title)s.%(ext)s"),
     }
+    if filter_days_override is not None:
+        custom_opts["ignoreerrors"] = False
+    if socket_timeout_override is not None:
+        custom_opts["socket_timeout"] = socket_timeout_override
+        custom_opts["retries"] = 1
+        custom_opts["fragment_retries"] = 1
     ydl_opts = get_ydl_opts(custom_opts)
 
     stats = {
@@ -627,12 +665,15 @@ def dl_audio_latest(channel_name, audio_folder=None, group_name=None):
     video_id = None
 
     try:
-        listing = fetch_channel_entries(
-            channel_name=channel_name,
-            max_videos=max_videos,
-            cookies_file=COOKIES_FILE,
-        )
-        entries_to_download = listing["entries"]
+        if entries_override is None:
+            listing = fetch_channel_entries(
+                channel_name=channel_name,
+                max_videos=max_videos,
+                cookies_file=COOKIES_FILE,
+            )
+            entries_to_download = listing["entries"]
+        else:
+            entries_to_download = entries_override
 
         if not entries_to_download:
             log_with_context(
@@ -640,7 +681,7 @@ def dl_audio_latest(channel_name, audio_folder=None, group_name=None):
                 "频道视频列表为空或全部无效",
                 yt_channel=channel_name
             )
-            return True
+            return stats if return_stats else True
 
         stats['total'] = len(entries_to_download)
         log_with_context(
@@ -660,6 +701,8 @@ def dl_audio_latest(channel_name, audio_folder=None, group_name=None):
                 channel_name=channel_name,
                 target_folder=target_folder,
                 ydl_opts=ydl_opts,
+                entry_filter=entry_filter,
+                inter_video_delay=inter_video_delay,
             )
 
         log_with_context(
@@ -675,5 +718,6 @@ def dl_audio_latest(channel_name, audio_folder=None, group_name=None):
             error=stats['error']
         )
     except Exception as err:
-        return _handle_latest_channel_error(channel_name, err, video_title, video_id)
-    return True
+        handled = _handle_latest_channel_error(channel_name, err, video_title, video_id)
+        return stats if return_stats and handled else handled
+    return stats if return_stats else True

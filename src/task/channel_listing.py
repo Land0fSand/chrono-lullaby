@@ -21,7 +21,7 @@ PREFERRED_HTTP_HEADERS = {
 PREFERRED_YT_EXTRACTOR_ARGS = {
     'youtube': {
         'lang': ['zh-TW'],
-        'player-client': ['web_embedded', 'ios', 'android']
+        'player_client': ['web_embedded', 'ios', 'android']
     }
 }
 
@@ -135,7 +135,7 @@ def fetch_channel_entries(
                     seen_ids.add(vid_id)
                 entries_to_download.append(entry)
                 tab_added += 1
-                if len(entries_to_download) >= max_videos:
+                if max_videos and tab_added >= max_videos:
                     break
 
             tab_counts[tab] = tab_added
@@ -147,10 +147,6 @@ def fetch_channel_entries(
                 new_entries=tab_added,
                 duplicates_skipped=tab_dupes
             )
-
-            if max_videos and len(entries_to_download) >= max_videos:
-                break
-
     log_with_context(
         logger, logging.INFO, f"{prefix + ': ' if prefix else ''}频道信息获取完成",
         yt_channel=channel_name,

@@ -50,7 +50,7 @@ def shorts_filter(info_dict):
         return None
 
 
-def oneday_filter(info_dict):
+def oneday_filter(info_dict, filter_days=None, cutoff_datetime=None):
     """过滤最近N天的视频（N从配置读取）"""
     try:
         timestamp = info_dict.get("timestamp")
@@ -67,8 +67,14 @@ def oneday_filter(info_dict):
         else:
             return None
 
-        filter_days = get_filter_days()
-        days_ago = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=filter_days)
+        if filter_days is None:
+            filter_days = get_filter_days()
+        days_ago = cutoff_datetime or (
+            datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=filter_days)
+        )
+
+        if cutoff_datetime is not None and not timestamp and info_dict.get("upload_date"):
+            return None if upload_datetime.date() >= days_ago.date() else f"视频超过{filter_days}天"
 
         if upload_datetime > days_ago:
             return None
@@ -79,7 +85,7 @@ def oneday_filter(info_dict):
         return None
 
 
-def combined_filter(info_dict):
+def combined_filter(info_dict, filter_days=None, cutoff_datetime=None):
     """组合过滤器：同时应用时间过滤、Shorts过滤和会员内容过滤"""
     try:
         shorts_result = shorts_filter(info_dict)
@@ -90,7 +96,9 @@ def combined_filter(info_dict):
         if member_result:
             return member_result
 
-        time_result = oneday_filter(info_dict)
+        time_result = oneday_filter(
+            info_dict, filter_days=filter_days, cutoff_datetime=cutoff_datetime
+        )
         if time_result:
             return time_result
 
